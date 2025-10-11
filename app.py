@@ -41,7 +41,7 @@ CORS(app, origins=['*'])
 # =========================
 # Configure Gemini AI
 # =========================
-API_KEY = "AIzaSyCDlweb2o-1WGSi-I-o2dCQB1YSDNupiDs"  # Replace with your actual API key
+API_KEY = "YOUR GEMINI API KEY"  # Replace with your actual API key
 genai.configure(api_key=API_KEY)
 
 try:
