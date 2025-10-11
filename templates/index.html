@@ -1,0 +1,903 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Smart Exam Evaluator</title>
+    <link rel="stylesheet" href="styles.css">
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+<script src="{{ url_for('static', filename='script.js') }}"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+</head>
+<body>
+    <!-- Animated Background -->
+    <div class="background">
+        <div class="blob blob-1"></div>
+        <div class="blob blob-2"></div>
+        <div class="blob blob-3"></div>
+        <div class="blob blob-4"></div>
+    </div>
+
+    <!-- Navigation Header -->
+    <nav class="navbar">
+        <div class="nav-container">
+            <div class="nav-brand">
+                <i class="fas fa-graduation-cap"></i>
+                <span>Smart Exam Evaluator</span>
+            </div>
+            <div class="nav-menu">
+                <button type="button" class="nav-item" id="navHome" data-page="landingPage">
+                    <i class="fas fa-home"></i>
+                    <span>Home</span>
+                </button>
+                <button type="button" class="nav-item" id="navDashboard" data-page="dashboard">
+                    <i class="fas fa-tachometer-alt"></i>
+                    <span>Dashboard</span>
+                </button>
+                <button type="button" class="nav-item" id="navReports" data-page="reportsPage">
+                    <i class="fas fa-chart-bar"></i>
+                    <span>Reports</span>
+                </button>
+                <button type="button" class="nav-item" id="navAdmin" data-page="adminPage">
+                    <i class="fas fa-cog"></i>
+                    <span>Admin</span>
+                </button>
+            </div>
+            <div class="nav-controls">
+                <button type="button" class="theme-toggle" id="themeToggle">
+                    <i class="fas fa-moon"></i>
+                </button>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Landing Page -->
+    <section id="landingPage" class="page active">
+        <div class="hero-container">
+            <div class="hero-content">
+                <div class="hero-icon">
+                    <i class="fas fa-brain"></i>
+                </div>
+                <h1 class="hero-title">Smart Exam Evaluator</h1>
+                <p class="hero-subtitle">
+                    Revolutionary AI-powered exam evaluation system that automates answer sheet checking
+                    with precision and efficiency. Transform your evaluation process today.
+                </p>
+                <div class="hero-features">
+                    <div class="feature">
+                        <i class="fas fa-eye"></i>
+                        <span>AI Vision Recognition</span>
+                    </div>
+                    <div class="feature">
+                        <i class="fas fa-chart-line"></i>
+                        <span>Real-time Analytics</span>
+                    </div>
+                    <div class="feature">
+                        <i class="fas fa-file-excel"></i>
+                        <span>Excel Reports</span>
+                    </div>
+                </div>
+                <button type="button" class="cta-button" id="getStartedBtn">
+                    <span>Get Started</span>
+                    <i class="fas fa-arrow-right"></i>
+                </button>
+            </div>
+            <div class="hero-visual">
+                <div class="floating-card">
+                    <i class="fas fa-file-alt"></i>
+                    <div class="progress-ring">
+                        <svg>
+                            <circle cx="40" cy="40" r="35"></circle>
+                        </svg>
+                        <span>95%</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Dashboard -->
+    <section id="dashboard" class="page">
+        <div class="dashboard-container">
+            <div class="dashboard-header">
+                <h1>
+                    <i class="fas fa-tachometer-alt"></i>
+                    Dashboard
+                </h1>
+                <p>Choose an option to begin your exam evaluation journey</p>
+            </div>
+            
+            <div class="dashboard-grid">
+                <div class="dashboard-card" id="newTestCard">
+                    <div class="card-icon">
+                        <i class="fas fa-plus-circle"></i>
+                    </div>
+                    <h3>New Test Analysis</h3>
+                    <p>Set up answer keys and start evaluating multiple student answer sheets with AI precision</p>
+                    <div class="card-stats">
+                        <span><i class="fas fa-clock"></i> ~2 min setup</span>
+                        <span><i class="fas fa-users"></i> Multiple students</span>
+                    </div>
+                    <button type="button" class="card-button">
+                        <span>Start Analysis</span>
+                        <i class="fas fa-arrow-right"></i>
+                    </button>
+                </div>
+
+                <div class="dashboard-card" id="viewReportsCard">
+                    <div class="card-icon">
+                        <i class="fas fa-chart-bar"></i>
+                    </div>
+                    <h3>View Reports</h3>
+                    <p>Access comprehensive reports, analytics, and download consolidated results</p>
+                    <div class="card-stats">
+                        <span><i class="fas fa-download"></i> Excel Export</span>
+                        <span><i class="fas fa-analytics"></i> Detailed Analytics</span>
+                    </div>
+                    <button type="button" class="card-button">
+                        <span>View Reports</span>
+                        <i class="fas fa-arrow-right"></i>
+                    </button>
+                </div>
+
+                <div class="dashboard-card" id="adminCard">
+                    <div class="card-icon">
+                        <i class="fas fa-cog"></i>
+                    </div>
+                    <h3>Admin Panel</h3>
+                    <p>Manage system settings, reset data, and configure evaluation parameters</p>
+                    <div class="card-stats">
+                        <span><i class="fas fa-shield-alt"></i> Secure Access</span>
+                        <span><i class="fas fa-tools"></i> System Controls</span>
+                    </div>
+                    <button type="button" class="card-button">
+                        <span>Admin Access</span>
+                        <i class="fas fa-arrow-right"></i>
+                    </button>
+                </div>
+            </div>
+
+            <div class="quick-stats">
+                <div class="stat-item">
+                    <i class="fas fa-users"></i>
+                    <div>
+                        <span class="stat-number" id="totalStudents">0</span>
+                        <span class="stat-label">Students Evaluated</span>
+                    </div>
+                </div>
+                <div class="stat-item">
+                    <i class="fas fa-percentage"></i>
+                    <div>
+                        <span class="stat-number" id="avgScore">0%</span>
+                        <span class="stat-label">Average Score</span>
+                    </div>
+                </div>
+                <div class="stat-item">
+                    <i class="fas fa-clock"></i>
+                    <div>
+                        <span class="stat-number" id="lastEval">Never</span>
+                        <span class="stat-label">Last Evaluation</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- New Test Setup -->
+    <section id="newTestSetup" class="page">
+        <div class="setup-container">
+            <div class="setup-header">
+                <button type="button" class="back-button" data-page="dashboard">
+                    <i class="fas fa-arrow-left"></i>
+                </button>
+                <h1>
+                    <i class="fas fa-clipboard-list"></i>
+                    New Test Setup
+                </h1>
+                <p>Configure your answer key and test parameters for multiple student evaluation</p>
+            </div>
+
+            <div class="setup-content">
+                <div class="setup-form">
+                    <form id="testSetupForm" novalidate>
+                        <div class="form-section">
+                            <h3><i class="fas fa-info-circle"></i> Test Information</h3>
+                            <div class="form-row">
+                                <div class="form-group">
+                                    <label for="staffName">Staff Name</label>
+                                    <input type="text" id="staffName" name="staffName" required placeholder="Enter staff name">
+                                </div>
+                                <div class="form-group">
+                                    <label for="subjectName">Subject Name</label>
+                                    <input type="text" id="subjectName" name="subjectName" required placeholder="Enter subject name">
+                                </div>
+                            </div>
+                            <div class="form-row">
+                                <div class="form-group">
+                                    <label for="totalStudents">Total Number of Students</label>
+                                    <input type="number" id="totalStudents" name="totalStudents" required min="1" max="1000" placeholder="e.g., 30">
+                                    <small class="input-help">Enter the total number of students (1-1000)</small>
+                                </div>
+                                <div class="form-group">
+                                    <label for="totalPages">Total No of Pages</label>
+                                    <input type="number" id="totalPages" name="totalPages" required min="1" max="50" placeholder="e.g., 4">
+                                    <small class="input-help">Number of pages in each student's answer sheet (1-50 pages)</small>
+                                </div>
+                            </div>
+                            <div class="form-row">
+                                <div class="form-group">
+                                    <label for="totalQuestions">Total Questions</label>
+                                    <input type="number" id="totalQuestions" name="totalQuestions" required min="1" max="200" placeholder="e.g., 50">
+                                    <small class="input-help">Enter the total number of questions (1-200)</small>
+                                </div>
+                                <div class="form-group">
+                                    <label for="marksPerQuestion">Marks per Question</label>
+                                    <input type="number" id="marksPerQuestion" name="marksPerQuestion" required min="0.5" step="0.5" placeholder="e.g., 1">
+                                </div>
+                            </div>
+                            <div class="form-row">
+                                <div class="form-group">
+                                    <label for="passingMarks">Passing Marks (%)</label>
+                                    <input type="number" id="passingMarks" name="passingMarks" required min="1" max="100" placeholder="e.g., 40">
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="form-section">
+                            <h3><i class="fas fa-key"></i> Answer Key Setup</h3>
+                            <div class="manual-entry">
+                                <div class="entry-header">
+                                    <h4>Enter Correct Answers</h4>
+                                    <div class="quick-fill">
+                                        <button type="button" data-fill="A">Fill All A</button>
+                                        <button type="button" data-fill="B">Fill All B</button>
+                                        <button type="button" data-fill="C">Fill All C</button>
+                                        <button type="button" data-fill="D">Fill All D</button>
+                                    </div>
+                                </div>
+                                <div id="questionsContainer" class="questions-container">
+                                    <!-- Questions will be dynamically generated -->
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="form-actions">
+                            <button type="button" class="secondary-button" data-page="dashboard">
+                                <i class="fas fa-times"></i>
+                                Cancel
+                            </button>
+                            <button type="submit" class="primary-button">
+                                <i class="fas fa-save"></i>
+                                Setup Test & Start Evaluation
+                            </button>
+                        </div>
+                    </form>
+                </div>
+
+                <div class="setup-preview">
+                    <div class="preview-card">
+                        <h3><i class="fas fa-eye"></i> Test Preview</h3>
+                        <div class="preview-content">
+                            <div class="preview-item">
+                                <span class="label">Staff Name:</span>
+                                <span id="previewStaff">-</span>
+                            </div>
+                            <div class="preview-item">
+                                <span class="label">Subject:</span>
+                                <span id="previewSubject">-</span>
+                            </div>
+                            <div class="preview-item">
+                                <span class="label">Total Students:</span>
+                                <span id="previewTotalStudents">-</span>
+                            </div>
+                            <div class="preview-item">
+                                <span class="label">Questions:</span>
+                                <span id="previewQuestions">-</span>
+                            </div>
+                            <div class="preview-item">
+                                <span class="label">Total Pages:</span>
+                                <span id="previewPages">-</span>
+                            </div>
+                            <div class="preview-item">
+                                <span class="label">Total Marks:</span>
+                                <span id="previewMarks">-</span>
+                            </div>
+                            <div class="preview-item">
+                                <span class="label">Passing Marks:</span>
+                                <span id="previewPassing">-</span>
+                            </div>
+                            <div class="preview-item">
+                                <span class="label">Answer Key:</span>
+                                <span id="previewKeyStatus">Not Set</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Student Evaluation -->
+    <section id="studentEvaluation" class="page">
+        <div class="evaluation-container">
+            <div class="evaluation-header">
+                <button type="button" class="back-button" data-page="dashboard">
+                    <i class="fas fa-arrow-left"></i>
+                </button>
+                <h1>
+                    <i class="fas fa-user-graduate"></i>
+                    Student Evaluation
+                </h1>
+                <p>Upload student answer sheets for AI-powered evaluation</p>
+                <div class="progress-info">
+                    <span id="studentProgress">Student 1 of 0</span>
+                </div>
+            </div>
+
+            <div class="evaluation-content">
+                <div class="evaluation-form">
+                    <form id="studentEvaluationForm" novalidate>
+                        <div class="form-section">
+                            <h3><i class="fas fa-user"></i> Student Information</h3>
+                            <div class="form-row">
+                                <div class="form-group">
+                                    <label for="studentName">Student Name</label>
+                                    <input type="text" id="studentName" name="studentName" required placeholder="Enter student name">
+                                </div>
+                                <div class="form-group">
+                                    <label for="rollNumber">Roll Number</label>
+                                    <input type="text" id="rollNumber" name="rollNumber" required placeholder="Enter roll number">
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="form-section">
+                            <h3><i class="fas fa-image"></i> Answer Sheet Upload</h3>
+                            <p class="section-subtitle">Upload each page of the answer sheet separately</p>
+                            <div id="pageUploadsContainer" class="page-uploads-container">
+                                <!-- Dynamic page upload sections will be generated here -->
+                            </div>
+                        </div>
+
+                        <!-- Analysis Results Section -->
+                        <div id="analysisResults" class="analysis-results" style="display: none;">
+                            <h3 class="section-title">
+                                <i class="fas fa-chart-line"></i>
+                                Analysis Results
+                            </h3>
+                            <div class="results-card">
+                                <div class="score-display">
+                                    <div class="score-circle">
+                                        <span id="scoreValue">0</span>
+                                        <small>/ <span id="totalMarksDisplay">0</span></small>
+                                    </div>
+                                    <div class="percentage">
+                                        <span id="percentageValue">0</span>%
+                                    </div>
+                                </div>
+                                <div class="analysis-details">
+                                    <div class="detail-item">
+                                        <span><i class="fas fa-check-circle"></i> Correct Answers:</span>
+                                        <span id="correctAnswers">0</span>
+                                    </div>
+                                    <div class="detail-item">
+                                        <span><i class="fas fa-times-circle"></i> Wrong Answers:</span>
+                                        <span id="wrongAnswers">0</span>
+                                    </div>
+                                    <div class="detail-item">
+                                        <span><i class="fas fa-medal"></i> Grade:</span>
+                                        <span id="gradeDisplay">-</span>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Question-wise Results Table -->
+                            <div class="question-results-section">
+                                <h4 class="section-title">
+                                    <i class="fas fa-list"></i>
+                                    Question-wise Analysis
+                                </h4>
+                                <div class="table-container">
+                                    <table class="question-results-table">
+                                        <thead>
+                                            <tr>
+                                                <th>Question No.</th>
+                                                <th>Correct Answer</th>
+                                                <th>Student Answer</th>
+                                                <th>Status</th>
+                                                <th>Marks</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody id="questionResultsBody">
+                                            <!-- Question results will be populated dynamically -->
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="form-actions">
+                            <button type="button" class="secondary-button" data-page="dashboard">
+                                <i class="fas fa-arrow-left"></i>
+                                Back to Dashboard
+                            </button>
+                            <button type="button" class="secondary-button" data-page="newTestSetup">
+                                <i class="fas fa-arrow-left"></i>
+                                Back to Setup
+                            </button>
+                            <button type="submit" class="primary-button" id="analyzeBtn">
+                                <i class="fas fa-search"></i>
+                                Analyze Answer Sheet
+                            </button>
+                            <button type="button" class="primary-button" id="nextStudentBtn" style="display: none;">
+                                <i class="fas fa-user-plus"></i>
+                                Next Student
+                            </button>
+                            <button type="button" class="success-button" id="finishEvaluationBtn" style="display: none;">
+                                <i class="fas fa-flag-checkered"></i>
+                                Finish & View Consolidated Report
+                            </button>
+                        </div>
+                    </form>
+                </div>
+
+                <div class="evaluation-status">
+                    <div class="status-card">
+                        <h3><i class="fas fa-tasks"></i> Evaluation Status</h3>
+                        <div id="evaluationProgress" class="progress-container">
+                            <div class="progress-step">
+                                <i class="fas fa-upload"></i>
+                                <span>Upload Complete</span>
+                            </div>
+                            <div class="progress-step">
+                                <i class="fas fa-eye"></i>
+                                <span>AI Processing</span>
+                            </div>
+                            <div class="progress-step">
+                                <i class="fas fa-check-circle"></i>
+                                <span>Evaluation Complete</span>
+                            </div>
+                        </div>
+                        <div id="progressBar" class="progress-bar">
+                            <div class="progress-fill"></div>
+                        </div>
+                        
+                        <!-- Evaluation Progress Summary -->
+                        <div class="evaluation-summary">
+                            <h4><i class="fas fa-chart-pie"></i> Progress Summary</h4>
+                            <div class="summary-stats">
+                                <div class="summary-stat">
+                                    <span class="stat-label">Completed:</span>
+                                    <span id="completedCount">0</span>
+                                </div>
+                                <div class="summary-stat">
+                                    <span class="stat-label">Remaining:</span>
+                                    <span id="remainingCount">0</span>
+                                </div>
+                                <div class="summary-stat">
+                                    <span class="stat-label">Total:</span>
+                                    <span id="totalStudentsCount">0</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Consolidated Report Page -->
+    <section id="consolidatedReport" class="page">
+        <div class="consolidated-container">
+            <div class="consolidated-header">
+                <button type="button" class="back-button" data-page="dashboard">
+                    <i class="fas fa-arrow-left"></i>
+                </button>
+                <h1>
+                    <i class="fas fa-chart-line"></i>
+                    Consolidated Report
+                </h1>
+                <p>Complete evaluation results for all students</p>
+            </div>
+
+            <!-- Success Animation -->
+            <div class="success-container">
+                <div class="success-animation">
+                    <div class="checkmark">
+                        <i class="fas fa-check"></i>
+                    </div>
+                </div>
+                <h2 class="success-title">Evaluation Complete!</h2>
+                <p class="success-message">All students have been successfully analyzed</p>
+            </div>
+
+            <!-- Summary Statistics -->
+            <div class="consolidated-stats">
+                <div class="stat-card">
+                    <i class="fas fa-users"></i>
+                    <div class="stat-content">
+                        <span class="stat-value" id="consolidatedTotalStudents">0</span>
+                        <span class="stat-title">Students Evaluated</span>
+                    </div>
+                </div>
+                <div class="stat-card">
+                    <i class="fas fa-percentage"></i>
+                    <div class="stat-content">
+                        <span class="stat-value" id="consolidatedAvgScore">0%</span>
+                        <span class="stat-title">Average Score</span>
+                    </div>
+                </div>
+                <div class="stat-card">
+                    <i class="fas fa-trophy"></i>
+                    <div class="stat-content">
+                        <span class="stat-value" id="consolidatedHighestScore">0%</span>
+                        <span class="stat-title">Highest Score</span>
+                    </div>
+                </div>
+                <div class="stat-card">
+                    <i class="fas fa-medal"></i>
+                    <div class="stat-content">
+                        <span class="stat-value" id="consolidatedPassRate">0%</span>
+                        <span class="stat-title">Pass Rate</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Consolidated Results Table -->
+            <div class="consolidated-report-section">
+                <div class="report-header">
+                    <h3 class="section-title">
+                        <i class="fas fa-table"></i>
+                        Detailed Results
+                    </h3>
+                    <div class="report-actions">
+                        <button type="button" class="export-button" id="downloadConsolidatedExcelBtn">
+                            <i class="fas fa-download"></i>
+                            Download Excel Report
+                        </button>
+                    </div>
+                </div>
+                
+                <div class="table-container">
+                    <table class="consolidated-table">
+                        <thead>
+                            <tr>
+                                <th>S.No</th>
+                                <th>Roll No</th>
+                                <th>Student Name</th>
+                                 <th>Test Title</th>
+                                
+                                <th>Percentage</th>
+                                <th>Grade</th>
+                                <th>Status</th>
+                                
+                            </tr>
+                        </thead>
+                        <tbody id="consolidatedResultsBody">
+                            <!-- Consolidated results will be populated dynamically -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Action Buttons -->
+            <div class="consolidated-actions">
+                <button type="button" class="secondary-button" data-page="dashboard">
+                    <i class="fas fa-tachometer-alt"></i>
+                    Back to Dashboard
+                </button>
+                <button type="button" class="primary-button" data-page="newTestSetup">
+                    <i class="fas fa-plus"></i>
+                    Start New Analysis
+                </button>
+            </div>
+        </div>
+    </section>
+
+    <!-- Reports Page -->
+    <section id="reportsPage" class="page">
+        <div class="reports-container">
+            <div class="reports-header">
+                <button type="button" class="back-button" data-page="dashboard">
+                    <i class="fas fa-arrow-left"></i>
+                </button>
+                <h1>
+                    <i class="fas fa-chart-bar"></i>
+                    Reports & Analytics
+                </h1>
+                <p>Comprehensive view of all evaluations and performance analytics</p>
+            </div>
+
+            <div class="reports-controls">
+                <div class="controls-left">
+                    <button type="button" class="control-button" id="refreshReportsBtn">
+                        <i class="fas fa-sync-alt"></i>
+                        Refresh
+                    </button>
+                    <select id="reportFilter" class="filter-select">
+                        <option value="all">All Tests</option>
+                        <option value="recent">Recent (24h)</option>
+                        <option value="thisWeek">This Week</option>
+                        <option value="thisMonth">This Month</option>
+                    </select>
+                </div>
+                <div class="controls-right">
+                    <button type="button" class="export-button" id="exportAllReportsBtn">
+                        <i class="fas fa-file-excel"></i>
+                        Export All Reports
+                    </button>
+                </div>
+            </div>
+
+            <div class="reports-stats">
+                <div class="stat-card">
+                    <i class="fas fa-clipboard-list"></i>
+                    <div class="stat-content">
+                        <span class="stat-value" id="totalReports">0</span>
+                        <span class="stat-title">Total Reports</span>
+                    </div>
+                </div>
+                <div class="stat-card">
+                    <i class="fas fa-users"></i>
+                    <div class="stat-content">
+                        <span class="stat-value" id="totalStudentsEvaluated">0</span>
+                        <span class="stat-title">Students Evaluated</span>
+                    </div>
+                </div>
+                <div class="stat-card">
+                    <i class="fas fa-percentage"></i>
+                    <div class="stat-content">
+                        <span class="stat-value" id="overallAverage">0%</span>
+                        <span class="stat-title">Overall Average</span>
+                    </div>
+                </div>
+                <div class="stat-card">
+                    <i class="fas fa-calendar"></i>
+                    <div class="stat-content">
+                        <span class="stat-value" id="recentTests">0</span>
+                        <span class="stat-title">Tests This Month</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="reports-content">
+                <div class="table-container">
+                    <table class="reports-table">
+                        <thead>
+                            <tr>
+                                <th>Test ID</th>
+                                <th>Subject</th>
+                                <th>Staff Name</th>
+                                <th>Date & Time</th>
+                                <th>Total Students</th>
+                                <th>Avg Score</th>
+                                <th>Pass Rate</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="reportsTableBody">
+                            <!-- Reports will be populated dynamically -->
+                        </tbody>
+                    </table>
+                </div>
+
+                <div class="empty-state" id="emptyReports">
+                    <i class="fas fa-clipboard"></i>
+                    <h3>No Reports Available</h3>
+                    <p>Start by evaluating some student answer sheets to see reports here.</p>
+                    <button type="button" class="cta-button" data-page="newTestSetup">
+                        <span>Start Evaluation</span>
+                        <i class="fas fa-arrow-right"></i>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Admin Page -->
+    <section id="adminPage" class="page">
+        <div class="admin-container">
+            <div class="admin-header">
+                <button type="button" class="back-button" data-page="dashboard">
+                    <i class="fas fa-arrow-left"></i>
+                </button>
+                <h1>
+                    <i class="fas fa-user-shield"></i>
+                    Admin Panel
+                </h1>
+                <p>System administration and configuration settings</p>
+            </div>
+
+            <div id="adminLogin" class="admin-login">
+                <div class="login-card">
+                    <div class="login-icon">
+                        <i class="fas fa-lock"></i>
+                    </div>
+                    <h2>Admin Authentication</h2>
+                    <p>Enter admin credentials to access system controls</p>
+                    <form id="adminLoginForm" novalidate>
+                        <div class="form-group">
+                            <label for="adminPassword">Password</label>
+                            <input type="password" id="adminPassword" name="adminPassword" required placeholder="Enter admin password">
+                        </div>
+                        <button type="submit" class="primary-button full-width">
+                            <i class="fas fa-sign-in-alt"></i>
+                            Login
+                        </button>
+                    </form>
+                </div>
+            </div>
+
+            <div id="adminControls" class="admin-controls" style="display: none;">
+                <div class="controls-grid">
+                    <div class="control-section">
+                        <h3><i class="fas fa-database"></i> Data Management</h3>
+                        <div class="control-actions">
+                            <button type="button" class="danger-button" id="deleteAllReportsBtn">
+                                <i class="fas fa-trash-alt"></i>
+                                Delete All Reports
+                            </button>
+                            <button type="button" class="warning-button" id="clearAnswerKeysBtn">
+                                <i class="fas fa-key"></i>
+                                Clear Answer Keys
+                            </button>
+                            <button type="button" class="secondary-button" id="exportSystemDataBtn">
+                                <i class="fas fa-download"></i>
+                                Export System Data
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="control-section">
+                        <h3><i class="fas fa-cogs"></i> System Settings</h3>
+                        <div class="settings-group">
+                            <div class="setting-item">
+                                <label for="refreshInterval">Auto-refresh Interval (seconds)</label>
+                                <input type="number" id="refreshInterval" min="5" max="300" value="30">
+                                <button type="button" id="updateRefreshBtn">Update</button>
+                            </div>
+                            <div class="setting-item">
+                                <label class="toggle-label">
+                                    <input type="checkbox" id="soundAlerts" checked>
+                                    <span class="toggle-slider"></span>
+                                    Sound Alerts
+                                </label>
+                            </div>
+                            <div class="setting-item">
+                                <label class="toggle-label">
+                                    <input type="checkbox" id="autoSave" checked>
+                                    <span class="toggle-slider"></span>
+                                    Auto-save Results
+                                </label>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="control-section">
+                        <h3><i class="fas fa-chart-line"></i> System Statistics</h3>
+                        <div class="system-stats">
+                            <div class="stat-row">
+                                <span>Total Evaluations:</span>
+                                <span id="systemTotalEvals">0</span>
+                            </div>
+                            <div class="stat-row">
+                                <span>Active Tests:</span>
+                                <span id="systemActiveTests">0</span>
+                            </div>
+                            <div class="stat-row">
+                                <span>System Uptime:</span>
+                                <span id="systemUptime">0h 0m</span>
+                            </div>
+                            <div class="stat-row">
+                                <span>Last Backup:</span>
+                                <span id="lastBackup">Never</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="control-section">
+                        <h3><i class="fas fa-tools"></i> Maintenance</h3>
+                        <div class="maintenance-actions">
+                            <button type="button" class="secondary-button" id="createBackupBtn">
+                                <i class="fas fa-archive"></i>
+                                Create Backup
+                            </button>
+                            <button type="button" class="secondary-button" id="optimizeDatabaseBtn">
+                                <i class="fas fa-compress-alt"></i>
+                                Optimize Database
+                            </button>
+                            <button type="button" class="secondary-button" id="clearCacheBtn">
+                                <i class="fas fa-broom"></i>
+                                Clear Cache
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="admin-logs">
+                    <h3><i class="fas fa-list-alt"></i> System Logs</h3>
+                    <div class="logs-container">
+                        <div id="systemLogs" class="logs-content">
+                            <!-- Logs will be populated dynamically -->
+                        </div>
+                    </div>
+                    <button type="button" class="secondary-button" id="clearLogsBtn">
+                        <i class="fas fa-trash"></i>
+                        Clear Logs
+                    </button>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Loading Overlay -->
+    <div id="loadingOverlay" class="loading-overlay">
+        <div class="loading-content">
+            <div class="loading-spinner"></div>
+            <h3 id="loadingText">Processing...</h3>
+            <p id="loadingSubtext">Please wait while we process your request</p>
+        </div>
+    </div>
+
+    <!-- Toast Notifications -->
+    <div id="toastContainer" class="toast-container"></div>
+
+    <!-- Confirmation Modal -->
+    <div id="confirmModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 id="confirmTitle">Confirm Action</h3>
+                <button type="button" class="modal-close" data-modal="confirmModal">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+            <div class="modal-body">
+                <p id="confirmMessage">Are you sure you want to perform this action?</p>
+            </div>
+            <div class="modal-actions">
+                <button type="button" class="secondary-button" data-modal="confirmModal">
+                    Cancel
+                </button>
+                <button type="button" id="confirmButton" class="danger-button">
+                    Confirm
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Footer -->
+    <footer class="footer">
+        <div class="footer-content">
+            <div class="footer-section">
+                <h4>Smart Exam Evaluator</h4>
+                <p>Revolutionizing exam evaluation with AI technology</p>
+            </div>
+            <div class="footer-section">
+                <h4>Features</h4>
+                <ul>
+                    <li><i class="fas fa-check"></i> AI-powered recognition</li>
+                    <li><i class="fas fa-check"></i> Real-time evaluation</li>
+                    <li><i class="fas fa-check"></i> Comprehensive reports</li>
+                    <li><i class="fas fa-check"></i> Excel export</li>
+                    <li><i class="fas fa-check"></i> Multiple student support</li>
+                </ul>
+            </div>
+            <div class="footer-section">
+                <h4>Support</h4>
+                <ul>
+                    <li><i class="fas fa-book"></i> Documentation</li>
+                    <li><i class="fas fa-question-circle"></i> User Guide</li>
+                    <li><i class="fas fa-headset"></i> Technical Support</li>
+                    <li><i class="fas fa-comment"></i> Feedback</li>
+                </ul>
+            </div>
+        </div>
+        <div class="footer-bottom">
+            <p>&copy; 2025 Smart Exam Evaluator. All rights reserved.</p>
+        </div>
+    </footer>
+
+    <script src="script.js"></script>
+</body>
+</html>
