@@ -4,11 +4,10 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Smart Exam Evaluator</title>
-    <link rel="stylesheet" href="styles.css">
+    <meta name="description" content="AI-powered exam evaluation system with automated answer sheet checking">
     <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
-<script src="{{ url_for('static', filename='script.js') }}"></script>
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
 </head>
 <body>
     <!-- Animated Background -->
@@ -45,6 +44,11 @@
                 </button>
             </div>
             <div class="nav-controls">
+                <!-- API Status Indicator -->
+                <div class="api-status-indicator" id="apiStatusIndicator" title="API Status">
+                    <span class="status-dot"></span>
+                    <span class="status-text" id="apiStatusText">Ready</span>
+                </div>
                 <button type="button" class="theme-toggle" id="themeToggle">
                     <i class="fas fa-moon"></i>
                 </button>
@@ -76,6 +80,10 @@
                     <div class="feature">
                         <i class="fas fa-file-excel"></i>
                         <span>Excel Reports</span>
+                    </div>
+                    <div class="feature">
+                        <i class="fas fa-tachometer-alt"></i>
+                        <span>Rate Limiting</span>
                     </div>
                 </div>
                 <button type="button" class="cta-button" id="getStartedBtn">
@@ -133,7 +141,7 @@
                     <p>Access comprehensive reports, analytics, and download consolidated results</p>
                     <div class="card-stats">
                         <span><i class="fas fa-download"></i> Excel Export</span>
-                        <span><i class="fas fa-analytics"></i> Detailed Analytics</span>
+                        <span><i class="fas fa-chart-line"></i> Detailed Analytics</span>
                     </div>
                     <button type="button" class="card-button">
                         <span>View Reports</span>
@@ -146,7 +154,7 @@
                         <i class="fas fa-cog"></i>
                     </div>
                     <h3>Admin Panel</h3>
-                    <p>Manage system settings, reset data, and configure evaluation parameters</p>
+                    <p>Manage system settings, rate limits, and configure evaluation parameters</p>
                     <div class="card-stats">
                         <span><i class="fas fa-shield-alt"></i> Secure Access</span>
                         <span><i class="fas fa-tools"></i> System Controls</span>
@@ -335,6 +343,30 @@
                 </div>
             </div>
 
+            <!-- Rate Limiter Status Bar -->
+            <div class="rate-limiter-bar" id="rateLimiterBar">
+                <div class="rl-stat">
+                    <i class="fas fa-tachometer-alt"></i>
+                    <span>RPM: <strong id="rlRpmCount">15/15</strong></span>
+                </div>
+                <div class="rl-stat">
+                    <i class="fas fa-calendar-day"></i>
+                    <span>Daily: <strong id="rlDayCount">1500/1500</strong></span>
+                </div>
+                <div class="rl-stat">
+                    <i class="fas fa-snowflake"></i>
+                    <span>Cooling: <strong id="rlCooling">2s</strong></span>
+                </div>
+                <div class="rl-controls">
+                    <button type="button" class="rl-pause-btn" id="pauseEvaluationBtn" title="Pause Evaluation">
+                        <i class="fas fa-pause"></i> Pause
+                    </button>
+                    <button type="button" class="rl-resume-btn" id="resumeEvaluationBtn" style="display:none;" title="Resume Evaluation">
+                        <i class="fas fa-play"></i> Resume
+                    </button>
+                </div>
+            </div>
+
             <div class="evaluation-content">
                 <div class="evaluation-form">
                     <form id="studentEvaluationForm" novalidate>
@@ -410,7 +442,6 @@
                                             </tr>
                                         </thead>
                                         <tbody id="questionResultsBody">
-                                            <!-- Question results will be populated dynamically -->
                                         </tbody>
                                     </table>
                                 </div>
@@ -463,7 +494,6 @@
                             <div class="progress-fill"></div>
                         </div>
                         
-                        <!-- Evaluation Progress Summary -->
                         <div class="evaluation-summary">
                             <h4><i class="fas fa-chart-pie"></i> Progress Summary</h4>
                             <div class="summary-stats">
@@ -501,7 +531,6 @@
                 <p>Complete evaluation results for all students</p>
             </div>
 
-            <!-- Success Animation -->
             <div class="success-container">
                 <div class="success-animation">
                     <div class="checkmark">
@@ -512,7 +541,6 @@
                 <p class="success-message">All students have been successfully analyzed</p>
             </div>
 
-            <!-- Summary Statistics -->
             <div class="consolidated-stats">
                 <div class="stat-card">
                     <i class="fas fa-users"></i>
@@ -544,7 +572,9 @@
                 </div>
             </div>
 
-            <!-- Consolidated Results Table -->
+            <!-- Additional Stats Container -->
+            <div id="additionalStats"></div>
+
             <div class="consolidated-report-section">
                 <div class="report-header">
                     <h3 class="section-title">
@@ -563,25 +593,21 @@
                     <table class="consolidated-table">
                         <thead>
                             <tr>
-                                <th>S.No</th>
+                                <th>Report ID</th>
                                 <th>Roll No</th>
                                 <th>Student Name</th>
-                                 <th>Test Title</th>
-                                
+                                <th>Test Title</th>
                                 <th>Percentage</th>
                                 <th>Grade</th>
                                 <th>Status</th>
-                                
                             </tr>
                         </thead>
                         <tbody id="consolidatedResultsBody">
-                            <!-- Consolidated results will be populated dynamically -->
                         </tbody>
                     </table>
                 </div>
             </div>
 
-            <!-- Action Buttons -->
             <div class="consolidated-actions">
                 <button type="button" class="secondary-button" data-page="dashboard">
                     <i class="fas fa-tachometer-alt"></i>
@@ -617,9 +643,9 @@
                     </button>
                     <select id="reportFilter" class="filter-select">
                         <option value="all">All Tests</option>
-                        <option value="recent">Recent (24h)</option>
-                        <option value="thisWeek">This Week</option>
-                        <option value="thisMonth">This Month</option>
+                        <option value="recent">Recent (30 days)</option>
+                        <option value="high-pass-rate">High Pass Rate (≥80%)</option>
+                        <option value="low-pass-rate">Low Pass Rate (<50%)</option>
                     </select>
                 </div>
                 <div class="controls-right">
@@ -661,6 +687,9 @@
                 </div>
             </div>
 
+            <!-- Detailed Reports Stats -->
+            <div id="detailedReportsStats"></div>
+
             <div class="reports-content">
                 <div class="table-container">
                     <table class="reports-table">
@@ -677,7 +706,6 @@
                             </tr>
                         </thead>
                         <tbody id="reportsTableBody">
-                            <!-- Reports will be populated dynamically -->
                         </tbody>
                     </table>
                 </div>
@@ -706,7 +734,7 @@
                     <i class="fas fa-user-shield"></i>
                     Admin Panel
                 </h1>
-                <p>System administration and configuration settings</p>
+                <p>System administration, rate limiting, and configuration settings</p>
             </div>
 
             <div id="adminLogin" class="admin-login">
@@ -731,6 +759,58 @@
 
             <div id="adminControls" class="admin-controls" style="display: none;">
                 <div class="controls-grid">
+                    <!-- Rate Limiter Control Panel -->
+                    <div class="control-section rate-limiter-section">
+                        <h3><i class="fas fa-tachometer-alt"></i> API Rate Limiter</h3>
+                        <div class="rate-limiter-dashboard">
+                            <div class="rl-stats-grid">
+                                <div class="rl-stat-card">
+                                    <span class="rl-stat-label">Requests / Min</span>
+                                    <span class="rl-stat-value" id="adminRlRpm">15/15</span>
+                                </div>
+                                <div class="rl-stat-card">
+                                    <span class="rl-stat-label">Requests / Day</span>
+                                    <span class="rl-stat-value" id="adminRlRpd">1500/1500</span>
+                                </div>
+                                <div class="rl-stat-card">
+                                    <span class="rl-stat-label">Total API Calls</span>
+                                    <span class="rl-stat-value" id="adminRlTotal">0</span>
+                                </div>
+                                <div class="rl-stat-card">
+                                    <span class="rl-stat-label">Total Errors</span>
+                                    <span class="rl-stat-value" id="adminRlErrors">0</span>
+                                </div>
+                            </div>
+                            <div class="rl-config-form">
+                                <div class="form-row">
+                                    <div class="form-group">
+                                        <label for="configRpm">Max RPM</label>
+                                        <input type="number" id="configRpm" min="1" max="60" value="15">
+                                    </div>
+                                    <div class="form-group">
+                                        <label for="configRpd">Max RPD</label>
+                                        <input type="number" id="configRpd" min="1" max="10000" value="1500">
+                                    </div>
+                                    <div class="form-group">
+                                        <label for="configCooling">Cooling (sec)</label>
+                                        <input type="number" id="configCooling" min="0" max="60" step="0.5" value="2">
+                                    </div>
+                                </div>
+                                <div class="rl-actions">
+                                    <button type="button" class="primary-button" id="updateRlConfigBtn">
+                                        <i class="fas fa-save"></i> Update Config
+                                    </button>
+                                    <button type="button" class="warning-button" id="adminPauseBtn">
+                                        <i class="fas fa-pause"></i> Pause API
+                                    </button>
+                                    <button type="button" class="success-button" id="adminResumeBtn" style="display:none;">
+                                        <i class="fas fa-play"></i> Resume API
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
                     <div class="control-section">
                         <h3><i class="fas fa-database"></i> Data Management</h3>
                         <div class="control-actions">
@@ -793,6 +873,10 @@
                                 <span>Last Backup:</span>
                                 <span id="lastBackup">Never</span>
                             </div>
+                            <div class="stat-row">
+                                <span>API Calls Today:</span>
+                                <span id="systemApiCalls">0</span>
+                            </div>
                         </div>
                     </div>
 
@@ -803,9 +887,9 @@
                                 <i class="fas fa-archive"></i>
                                 Create Backup
                             </button>
-                            <button type="button" class="secondary-button" id="optimizeDatabaseBtn">
-                                <i class="fas fa-compress-alt"></i>
-                                Optimize Database
+                            <button type="button" class="secondary-button" id="cleanupFilesBtn">
+                                <i class="fas fa-broom"></i>
+                                Cleanup Old Files
                             </button>
                             <button type="button" class="secondary-button" id="clearCacheBtn">
                                 <i class="fas fa-broom"></i>
@@ -819,7 +903,6 @@
                     <h3><i class="fas fa-list-alt"></i> System Logs</h3>
                     <div class="logs-container">
                         <div id="systemLogs" class="logs-content">
-                            <!-- Logs will be populated dynamically -->
                         </div>
                     </div>
                     <button type="button" class="secondary-button" id="clearLogsBtn">
@@ -837,6 +920,15 @@
             <div class="loading-spinner"></div>
             <h3 id="loadingText">Processing...</h3>
             <p id="loadingSubtext">Please wait while we process your request</p>
+            <div class="loading-progress" id="loadingProgress" style="display:none;">
+                <div class="loading-progress-bar">
+                    <div class="loading-progress-fill" id="loadingProgressFill"></div>
+                </div>
+                <div class="loading-tokens">
+                    <span><i class="fas fa-tachometer-alt"></i> RPM: <strong id="loadingRpm">-</strong></span>
+                    <span><i class="fas fa-calendar-day"></i> Daily: <strong id="loadingRpd">-</strong></span>
+                </div>
+            </div>
         </div>
     </div>
 
@@ -879,7 +971,7 @@
                     <li><i class="fas fa-check"></i> AI-powered recognition</li>
                     <li><i class="fas fa-check"></i> Real-time evaluation</li>
                     <li><i class="fas fa-check"></i> Comprehensive reports</li>
-                    <li><i class="fas fa-check"></i> Excel export</li>
+                    <li><i class="fas fa-check"></i> Rate limiting & scaling</li>
                     <li><i class="fas fa-check"></i> Multiple student support</li>
                 </ul>
             </div>
@@ -894,10 +986,10 @@
             </div>
         </div>
         <div class="footer-bottom">
-            <p>&copy; 2025 Smart Exam Evaluator. All rights reserved.</p>
+            <p>&copy; 2025 Smart Exam Evaluator v3.0. All rights reserved.</p>
         </div>
     </footer>
 
-    <script src="script.js"></script>
+    <script src="{{ url_for('static', filename='script.js') }}"></script>
 </body>
 </html>

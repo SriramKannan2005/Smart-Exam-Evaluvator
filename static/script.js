@@ -1,5 +1,5 @@
-// Smart Exam Evaluator - Enhanced with Custom Excel Format
-// Version: 2.2.0 - Complete Implementation
+// Smart Exam Evaluator - Enhanced with Rate Limiting & Admin Controls
+// Version: 3.0.0 - Production Ready
 
 class SmartExamEvaluator {
     constructor() {
@@ -21,13 +21,9 @@ class SmartExamEvaluator {
             autoSave: true
         };
         
-        // API base URL - modify if your Flask server runs on different host/port
         this.API_BASE_URL = window.location.hostname === 'localhost' ? 'http://localhost:5000' : '';
-        
-        // In-memory storage for browser compatibility
-        this.savedSettings = null;
-        this.savedTheme = 'light';
         this.pendingAction = null;
+        this._rateLimiterInterval = null;
         
         this.init();
     }
@@ -38,208 +34,199 @@ class SmartExamEvaluator {
         this.initializeTheme();
         this.loadSettings();
         this.showPage('landingPage');
+        this.startRateLimiterPolling();
     }
 
-    // API Helper Methods
+    // =====================
+    // API Helper
+    // =====================
     async apiCall(endpoint, method = 'GET', data = null, isFormData = false) {
         const url = `${this.API_BASE_URL}/api${endpoint}`;
         const options = {
             method: method,
-            headers: isFormData ? {} : {
-                'Content-Type': 'application/json',
-            },
+            headers: isFormData ? {} : { 'Content-Type': 'application/json' },
         };
-
         if (data) {
-            if (isFormData) {
-                options.body = data;
-            } else {
-                options.body = JSON.stringify(data);
-            }
+            options.body = isFormData ? data : JSON.stringify(data);
         }
+        const response = await fetch(url, options);
+        const result = await response.json();
+        if (!response.ok) {
+            throw new Error(result.error || `Server error: ${response.status}`);
+        }
+        return result;
+    }
 
+    // =====================
+    // Rate Limiter UI
+    // =====================
+    startRateLimiterPolling() {
+        this.updateRateLimiterUI();
+        this._rateLimiterInterval = setInterval(() => this.updateRateLimiterUI(), 5000);
+    }
+
+    async updateRateLimiterUI() {
         try {
-            const response = await fetch(url, options);
-            const result = await response.json();
-            
-            if (!response.ok) {
-                throw new Error(result.error || `HTTP error! status: ${response.status}`);
+            const res = await this.apiCall('/rate-limiter/status');
+            if (!res.success) return;
+            const rl = res.rateLimiter;
+
+            // Navbar status indicator
+            const dot = document.querySelector('.status-dot');
+            const text = document.getElementById('apiStatusText');
+            if (dot && text) {
+                if (rl.isPaused) {
+                    dot.className = 'status-dot paused';
+                    text.textContent = 'Paused';
+                } else if (rl.remainingRPM <= 2) {
+                    dot.className = 'status-dot throttled';
+                    text.textContent = 'Throttled';
+                } else {
+                    dot.className = 'status-dot active';
+                    text.textContent = 'Ready';
+                }
             }
-            
-            return result;
-        } catch (error) {
-            console.error(`API call failed: ${endpoint}`, error);
-            // Mock successful response for demo purposes
-            if (endpoint === '/test/setup') {
-                return { success: true, testId: `TEST_${Date.now()}` };
-            } else if (endpoint === '/student/evaluate') {
-                return this.mockEvaluationResponse(data);
-            } else if (endpoint.includes('/reports/consolidated')) {
-                return { success: true, consolidatedReports: this.allReports, stats: {} };
+
+            // Evaluation page bar
+            const rpmEl = document.getElementById('rlRpmCount');
+            const dayEl = document.getElementById('rlDayCount');
+            const coolEl = document.getElementById('rlCooling');
+            if (rpmEl) rpmEl.textContent = `${rl.remainingRPM}/${rl.maxRPM}`;
+            if (dayEl) dayEl.textContent = `${rl.remainingRPD}/${rl.maxRPD}`;
+            if (coolEl) coolEl.textContent = `${rl.coolingSeconds}s`;
+
+            // Admin panel stats
+            const adminRpm = document.getElementById('adminRlRpm');
+            const adminRpd = document.getElementById('adminRlRpd');
+            const adminTotal = document.getElementById('adminRlTotal');
+            const adminErrors = document.getElementById('adminRlErrors');
+            const apiCalls = document.getElementById('systemApiCalls');
+            if (adminRpm) adminRpm.textContent = `${rl.remainingRPM}/${rl.maxRPM}`;
+            if (adminRpd) adminRpd.textContent = `${rl.remainingRPD}/${rl.maxRPD}`;
+            if (adminTotal) adminTotal.textContent = rl.totalCalls;
+            if (adminErrors) adminErrors.textContent = rl.totalErrors;
+            if (apiCalls) apiCalls.textContent = rl.callsToday;
+
+            // Pause/Resume button visibility
+            const pauseBtn = document.getElementById('pauseEvaluationBtn');
+            const resumeBtn = document.getElementById('resumeEvaluationBtn');
+            const adminPause = document.getElementById('adminPauseBtn');
+            const adminResume = document.getElementById('adminResumeBtn');
+            if (rl.isPaused) {
+                if (pauseBtn) pauseBtn.style.display = 'none';
+                if (resumeBtn) resumeBtn.style.display = 'inline-flex';
+                if (adminPause) adminPause.style.display = 'none';
+                if (adminResume) adminResume.style.display = 'inline-flex';
+            } else {
+                if (pauseBtn) pauseBtn.style.display = 'inline-flex';
+                if (resumeBtn) resumeBtn.style.display = 'none';
+                if (adminPause) adminPause.style.display = 'inline-flex';
+                if (adminResume) adminResume.style.display = 'none';
             }
-            throw error;
+        } catch (e) {
+            // Server unreachable - show offline
+            const dot = document.querySelector('.status-dot');
+            const text = document.getElementById('apiStatusText');
+            if (dot) dot.className = 'status-dot offline';
+            if (text) text.textContent = 'Offline';
         }
     }
 
-    // Mock response for demo purposes
-    mockEvaluationResponse(formData) {
-        const studentName = formData.get('studentName');
-        const rollNumber = formData.get('rollNumber');
-        
-        // Generate mock evaluation results
-        const totalQuestions = this.testData.totalQuestions;
-        const correctAnswers = Math.floor(Math.random() * (totalQuestions - 1)) + 1;
-        const obtainedMarks = correctAnswers * this.testData.marksPerQuestion;
-        const totalMarks = totalQuestions * this.testData.marksPerQuestion;
-        const percentage = Math.round((obtainedMarks / totalMarks) * 100);
-        
-        let grade, status;
-        if (percentage >= 90) {
-            grade = 'A+';
-        } else if (percentage >= 80) {
-            grade = 'A';
-        } else if (percentage >= 70) {
-            grade = 'B';
-        } else if (percentage >= 60) {
-            grade = 'C';
-        } else if (percentage >= 50) {
-            grade = 'D';
-        } else {
-            grade = 'F';
+    async pauseEvaluation() {
+        try {
+            await this.apiCall('/rate-limiter/pause', 'POST');
+            this.showToast('Evaluation paused', 'warning');
+            this.updateRateLimiterUI();
+        } catch (e) {
+            this.showToast(`Pause failed: ${e.message}`, 'error');
         }
-        
-        status = percentage >= this.testData.passingMarks ? 'PASS' : 'FAIL';
-        
-        const results = [];
-        for (let i = 1; i <= totalQuestions; i++) {
-            const isCorrect = i <= correctAnswers;
-            results.push({
-                questionNo: i,
-                correctAnswer: this.testData.answerKey[i-1] || 'A',
-                studentAnswer: isCorrect ? this.testData.answerKey[i-1] : ['A', 'B', 'C', 'D'][Math.floor(Math.random() * 4)],
-                isCorrect: isCorrect,
-                marks: isCorrect ? this.testData.marksPerQuestion : 0
-            });
-        }
-        
-        return {
-            success: true,
-            evaluation: {
-                studentName: studentName,
-                rollNumber: rollNumber,
-                summary: {
-                    totalQuestions: totalQuestions,
-                    correctAnswers: correctAnswers,
-                    obtainedMarks: obtainedMarks,
-                    totalMarks: totalMarks,
-                    percentage: percentage,
-                    grade: grade,
-                    status: status
-                },
-                results: results,
-                evaluatedAt: new Date().toISOString()
-            }
-        };
     }
 
+    async resumeEvaluation() {
+        try {
+            await this.apiCall('/rate-limiter/resume', 'POST');
+            this.showToast('Evaluation resumed', 'success');
+            this.updateRateLimiterUI();
+        } catch (e) {
+            this.showToast(`Resume failed: ${e.message}`, 'error');
+        }
+    }
+
+    async updateRateLimiterConfig() {
+        const rpm = parseInt(document.getElementById('configRpm')?.value);
+        const rpd = parseInt(document.getElementById('configRpd')?.value);
+        const cooling = parseFloat(document.getElementById('configCooling')?.value);
+        try {
+            await this.apiCall('/rate-limiter/config', 'POST', { rpm, rpd, coolingSeconds: cooling });
+            this.showToast('Rate limiter config updated', 'success');
+            this.updateRateLimiterUI();
+        } catch (e) {
+            this.showToast(`Config update failed: ${e.message}`, 'error');
+        }
+    }
+
+    // =====================
+    // Event Listeners
+    // =====================
     setupEventListeners() {
         // Navigation
         document.querySelectorAll('.nav-item').forEach(item => {
             item.addEventListener('click', (e) => {
-                const page = e.currentTarget.dataset.page;
-                this.navigateTo(page);
+                this.navigateTo(e.currentTarget.dataset.page);
             });
         });
 
         // Theme toggle
-        document.getElementById('themeToggle')?.addEventListener('click', () => {
-            this.toggleTheme();
-        });
+        document.getElementById('themeToggle')?.addEventListener('click', () => this.toggleTheme());
 
         // Hero CTA
-        document.getElementById('getStartedBtn')?.addEventListener('click', () => {
-            this.navigateTo('dashboard');
-        });
+        document.getElementById('getStartedBtn')?.addEventListener('click', () => this.navigateTo('dashboard'));
 
         // Dashboard cards
-        document.getElementById('newTestCard')?.addEventListener('click', () => {
-            this.navigateTo('newTestSetup');
-        });
-
-        document.getElementById('viewReportsCard')?.addEventListener('click', () => {
-            this.navigateTo('reportsPage');
-        });
-
-        document.getElementById('adminCard')?.addEventListener('click', () => {
-            this.navigateTo('adminPage');
-        });
+        document.getElementById('newTestCard')?.addEventListener('click', () => this.navigateTo('newTestSetup'));
+        document.getElementById('viewReportsCard')?.addEventListener('click', () => this.navigateTo('reportsPage'));
+        document.getElementById('adminCard')?.addEventListener('click', () => this.navigateTo('adminPage'));
 
         // Back buttons
         document.querySelectorAll('.back-button').forEach(btn => {
-            btn.addEventListener('click', (e) => {
-                const page = e.currentTarget.dataset.page;
-                this.navigateTo(page);
-            });
+            btn.addEventListener('click', (e) => this.navigateTo(e.currentTarget.dataset.page));
         });
 
         // Test setup form
-        document.getElementById('testSetupForm')?.addEventListener('submit', (e) => {
-            this.handleTestSetup(e);
-        });
+        document.getElementById('testSetupForm')?.addEventListener('submit', (e) => this.handleTestSetup(e));
+        document.getElementById('studentEvaluationForm')?.addEventListener('submit', (e) => this.handleStudentEvaluation(e));
+        document.getElementById('adminLoginForm')?.addEventListener('submit', (e) => this.handleAdminLogin(e));
 
-        // Student evaluation form
-        document.getElementById('studentEvaluationForm')?.addEventListener('submit', (e) => {
-            this.handleStudentEvaluation(e);
-        });
-
-        // Admin login form
-        document.getElementById('adminLoginForm')?.addEventListener('submit', (e) => {
-            this.handleAdminLogin(e);
-        });
-
-        // Form input listeners for live preview
+        // Form preview
         this.setupFormPreviewListeners();
 
-        // Quick fill buttons
+        // Quick fill
         document.querySelectorAll('.quick-fill button').forEach(btn => {
-            btn.addEventListener('click', (e) => {
-                const fillValue = e.currentTarget.dataset.fill;
-                this.quickFillAnswers(fillValue);
-            });
+            btn.addEventListener('click', (e) => this.quickFillAnswers(e.currentTarget.dataset.fill));
         });
 
         // Admin controls
         this.setupAdminControls();
-
-        // Modal controls
         this.setupModalControls();
 
-        // Action buttons in evaluation
-        document.getElementById('nextStudentBtn')?.addEventListener('click', () => {
-            this.nextStudent();
-        });
+        // Evaluation buttons
+        document.getElementById('nextStudentBtn')?.addEventListener('click', () => this.nextStudent());
+        document.getElementById('finishEvaluationBtn')?.addEventListener('click', () => this.finishEvaluation());
 
-        document.getElementById('finishEvaluationBtn')?.addEventListener('click', () => {
-            this.finishEvaluation();
-        });
+        // Export
+        document.getElementById('downloadConsolidatedExcelBtn')?.addEventListener('click', () => this.exportConsolidatedReport());
+        document.getElementById('exportAllReportsBtn')?.addEventListener('click', () => this.exportAllConsolidatedReports());
 
-        // Export buttons
-        document.getElementById('downloadConsolidatedExcelBtn')?.addEventListener('click', () => {
-            this.exportConsolidatedReport();
-        });
+        // Reports
+        document.getElementById('refreshReportsBtn')?.addEventListener('click', () => this.loadReports());
+        document.getElementById('reportFilter')?.addEventListener('change', (e) => this.filterReports(e.target.value));
 
-        document.getElementById('exportAllReportsBtn')?.addEventListener('click', () => {
-            this.exportAllConsolidatedReports();
-        });
-
-        // Reports controls
-        document.getElementById('refreshReportsBtn')?.addEventListener('click', () => {
-            this.loadReports();
-        });
-
-        document.getElementById('reportFilter')?.addEventListener('change', (e) => {
-            this.filterReports(e.target.value);
-        });
+        // Rate limiter controls
+        document.getElementById('pauseEvaluationBtn')?.addEventListener('click', () => this.pauseEvaluation());
+        document.getElementById('resumeEvaluationBtn')?.addEventListener('click', () => this.resumeEvaluation());
+        document.getElementById('adminPauseBtn')?.addEventListener('click', () => this.pauseEvaluation());
+        document.getElementById('adminResumeBtn')?.addEventListener('click', () => this.resumeEvaluation());
+        document.getElementById('updateRlConfigBtn')?.addEventListener('click', () => this.updateRateLimiterConfig());
     }
 
     setupFormPreviewListeners() {
@@ -252,29 +239,22 @@ class SmartExamEvaluator {
             { input: 'marksPerQuestion', preview: 'previewMarks' },
             { input: 'passingMarks', preview: 'previewPassing' }
         ];
-
         previewFields.forEach(field => {
             const input = document.getElementById(field.input);
             const preview = document.getElementById(field.preview);
-            
             if (input && preview) {
                 input.addEventListener('input', (e) => {
                     let value = e.target.value || '-';
-                    
                     if (field.input === 'marksPerQuestion') {
-                        const totalQuestions = document.getElementById('totalQuestions').value || 0;
-                        const marksPerQuestion = e.target.value || 0;
-                        value = totalQuestions * marksPerQuestion || '-';
+                        const totalQ = document.getElementById('totalQuestions').value || 0;
+                        value = totalQ * (e.target.value || 0) || '-';
                     } else if (field.input === 'passingMarks') {
                         value = value + '%';
                     }
-                    
                     preview.textContent = value;
                 });
             }
         });
-
-        // Questions input listener
         document.getElementById('totalQuestions')?.addEventListener('input', (e) => {
             const count = parseInt(e.target.value) || 0;
             this.generateQuestionInputs(count);
@@ -283,87 +263,36 @@ class SmartExamEvaluator {
     }
 
     setupAdminControls() {
-        // Data management
         document.getElementById('deleteAllReportsBtn')?.addEventListener('click', () => {
-            this.confirmAction(
-                'Delete All Consolidated Reports',
-                'This will permanently delete all consolidated test reports. This action cannot be undone.',
-                () => this.deleteAllConsolidatedReports()
-            );
+            this.confirmAction('Delete All Reports', 'This will permanently delete all reports. This cannot be undone.', () => this.deleteAllConsolidatedReports());
         });
-
         document.getElementById('clearAnswerKeysBtn')?.addEventListener('click', () => {
-            this.confirmAction(
-                'Clear Answer Keys',
-                'This will clear all stored answer keys. You will need to re-enter them for future evaluations.',
-                () => this.clearAnswerKeys()
-            );
+            this.confirmAction('Clear Answer Keys', 'This will clear all stored answer keys.', () => this.clearAnswerKeys());
         });
-
-        document.getElementById('exportSystemDataBtn')?.addEventListener('click', () => {
-            this.exportSystemData();
-        });
-
-        // Settings
-        document.getElementById('updateRefreshBtn')?.addEventListener('click', () => {
-            this.updateRefreshInterval();
-        });
-
-        document.getElementById('soundAlerts')?.addEventListener('change', (e) => {
-            this.settings.soundAlerts = e.target.checked;
-            this.saveSettings();
-        });
-
-        document.getElementById('autoSave')?.addEventListener('change', (e) => {
-            this.settings.autoSave = e.target.checked;
-            this.saveSettings();
-        });
-
-        // Maintenance
-        document.getElementById('createBackupBtn')?.addEventListener('click', () => {
-            this.createBackup();
-        });
-
-        document.getElementById('optimizeDatabaseBtn')?.addEventListener('click', () => {
-            this.optimizeDatabase();
-        });
-
-        document.getElementById('clearCacheBtn')?.addEventListener('click', () => {
-            this.clearCache();
-        });
-
-        document.getElementById('clearLogsBtn')?.addEventListener('click', () => {
-            this.clearSystemLogs();
-        });
+        document.getElementById('exportSystemDataBtn')?.addEventListener('click', () => this.exportSystemData());
+        document.getElementById('updateRefreshBtn')?.addEventListener('click', () => this.updateRefreshInterval());
+        document.getElementById('soundAlerts')?.addEventListener('change', (e) => { this.settings.soundAlerts = e.target.checked; this.saveSettings(); });
+        document.getElementById('autoSave')?.addEventListener('change', (e) => { this.settings.autoSave = e.target.checked; this.saveSettings(); });
+        document.getElementById('createBackupBtn')?.addEventListener('click', () => this.createBackup());
+        document.getElementById('cleanupFilesBtn')?.addEventListener('click', () => this.cleanupOldFiles());
+        document.getElementById('clearCacheBtn')?.addEventListener('click', () => this.clearCache());
+        document.getElementById('clearLogsBtn')?.addEventListener('click', () => this.clearSystemLogs());
     }
 
     setupModalControls() {
-        // Modal close buttons
         document.querySelectorAll('[data-modal]').forEach(btn => {
-            btn.addEventListener('click', (e) => {
-                const modalId = e.currentTarget.dataset.modal;
-                this.closeModal(modalId);
-            });
+            btn.addEventListener('click', (e) => this.closeModal(e.currentTarget.dataset.modal));
         });
-
-        // Confirm modal
         document.getElementById('confirmButton')?.addEventListener('click', () => {
-            if (this.pendingAction) {
-                this.pendingAction();
-                this.pendingAction = null;
-            }
-            this.closeModal('confirmModal');
-        });
-
-        document.getElementById('cancelButton')?.addEventListener('click', () => {
-            this.pendingAction = null;
+            if (this.pendingAction) { this.pendingAction(); this.pendingAction = null; }
             this.closeModal('confirmModal');
         });
     }
 
-    // Navigation Methods
+    // =====================
+    // Navigation
+    // =====================
     navigateTo(pageId) {
-        // Special handling for admin page
         if (pageId === 'adminPage' && !this.isLoggedIn) {
             this.showPage('adminPage');
             document.getElementById('adminLogin').style.display = 'block';
@@ -373,46 +302,31 @@ class SmartExamEvaluator {
             document.getElementById('adminLogin').style.display = 'none';
             document.getElementById('adminControls').style.display = 'block';
             this.updateSystemStats();
+            this.updateRateLimiterUI();
         } else {
             this.showPage(pageId);
         }
-
-        // Update navigation active state
-        document.querySelectorAll('.nav-item').forEach(item => {
-            item.classList.remove('active');
-        });
-        
+        document.querySelectorAll('.nav-item').forEach(item => item.classList.remove('active'));
         const activeNav = document.querySelector(`[data-page="${pageId}"]`);
-        if (activeNav) {
-            activeNav.classList.add('active');
-        }
+        if (activeNav) activeNav.classList.add('active');
     }
 
     showPage(pageId) {
-        // Hide all pages
-        document.querySelectorAll('.page').forEach(page => {
-            page.classList.remove('active');
-        });
-        
-        // Show target page
+        document.querySelectorAll('.page').forEach(page => page.classList.remove('active'));
         const targetPage = document.getElementById(pageId);
         if (targetPage) {
             targetPage.classList.add('active');
             this.currentPage = pageId;
-            
-            // Page-specific initialization
-            if (pageId === 'reportsPage') {
-                this.loadReports();
-            } else if (pageId === 'dashboard') {
-                this.loadDashboardStats();
-            }
+            if (pageId === 'reportsPage') this.loadReports();
+            else if (pageId === 'dashboard') this.loadDashboardStats();
         }
     }
 
-    // Test Setup Methods
+    // =====================
+    // Test Setup
+    // =====================
     async handleTestSetup(e) {
         e.preventDefault();
-        
         const formData = new FormData(e.target);
         const testData = {
             testTitle: formData.get('subjectName'),
@@ -424,25 +338,17 @@ class SmartExamEvaluator {
             passingMarks: parseFloat(formData.get('passingMarks')),
             answerKey: this.getAnswerKey()
         };
-
-        // Validate test data
-        if (!this.validateTestData(testData)) {
-            return;
-        }
-
+        if (!this.validateTestData(testData)) return;
         this.showLoading('Setting up test...', 'Please wait while we configure your test');
-
         try {
             const response = await this.apiCall('/test/setup', 'POST', testData);
-            
             if (response.success) {
                 this.testData = testData;
                 this.testData.testId = response.testId;
                 this.currentStudent = 1;
                 this.studentResults = [];
-                
                 this.hideLoading();
-                this.showToast('Test setup complete! Ready for student evaluation.', 'success');
+                this.showToast('Test setup complete! Ready for evaluation.', 'success');
                 this.navigateTo('studentEvaluation');
                 this.setupStudentEvaluation();
             } else {
@@ -456,1283 +362,668 @@ class SmartExamEvaluator {
 
     validateTestData(data) {
         const errors = [];
-        
-        if (!data.staffName.trim()) errors.push('Staff name is required');
-        if (!data.testTitle.trim()) errors.push('Subject name is required');
+        if (!data.staffName || !data.staffName.trim()) errors.push('Staff name is required');
+        if (!data.testTitle || !data.testTitle.trim()) errors.push('Subject name is required');
         if (data.totalStudents < 1) errors.push('Total students must be at least 1');
         if (data.totalQuestions < 1) errors.push('Total questions must be at least 1');
-        if (data.marksPerQuestion <= 0) errors.push('Marks per question must be greater than 0');
-        if (data.passingMarks < 0 || data.passingMarks > 100) errors.push('Passing marks must be between 0-100%');
+        if (data.marksPerQuestion <= 0) errors.push('Marks per question must be > 0');
+        if (data.passingMarks < 0 || data.passingMarks > 100) errors.push('Passing marks must be 0-100%');
         if (!data.answerKey || data.answerKey.length !== data.totalQuestions) {
-            errors.push('Answer key must be complete for all questions');
+            errors.push('Answer key must be complete');
         }
-
         if (errors.length > 0) {
             this.showToast(errors.join('<br>'), 'error');
             return false;
         }
-
         return true;
     }
 
     generateQuestionInputs(count) {
         const container = document.getElementById('questionsContainer');
         if (!container) return;
-
         container.innerHTML = '';
-        
-        if (count > 0) {
-            for (let i = 1; i <= count; i++) {
-                const answerInput = document.createElement('div');
-                answerInput.className = 'answer-input';
-                answerInput.innerHTML = `
-                    <label>Q${i}</label>
-                    <select name="answer_${i}" data-question="${i}">
-                        <option value="">-</option>
-                        <option value="A">A</option>
-                        <option value="B">B</option>
-                        <option value="C">C</option>
-                        <option value="D">D</option>
-                    </select>
-                `;
-                container.appendChild(answerInput);
-            }
-            
-            // Add change listeners to update preview
-            container.querySelectorAll('select').forEach(select => {
-                select.addEventListener('change', () => {
-                    this.updateAnswerKeyPreview();
-                });
-            });
+        for (let i = 1; i <= count; i++) {
+            const div = document.createElement('div');
+            div.className = 'answer-input';
+            div.innerHTML = `<label>Q${i}</label><select name="answer_${i}" data-question="${i}"><option value="">-</option><option value="A">A</option><option value="B">B</option><option value="C">C</option><option value="D">D</option></select>`;
+            container.appendChild(div);
         }
+        container.querySelectorAll('select').forEach(s => s.addEventListener('change', () => this.updateAnswerKeyPreview()));
     }
 
     quickFillAnswers(value) {
-        document.querySelectorAll('#questionsContainer select').forEach(select => {
-            select.value = value;
-        });
+        document.querySelectorAll('#questionsContainer select').forEach(s => { s.value = value; });
         this.updateAnswerKeyPreview();
     }
 
     getAnswerKey() {
         const selects = document.querySelectorAll('#questionsContainer select');
-        const answers = [];
-        
-        selects.forEach(select => {
-            answers.push(select.value || 'A');
-        });
-        
-        return answers;
+        return Array.from(selects).map(s => s.value || 'A');
     }
 
     updateAnswerKeyPreview() {
         const answerKey = this.getAnswerKey();
-        const hasAnswers = answerKey.some(answer => answer !== '');
         const preview = document.getElementById('previewKeyStatus');
-        
         if (preview) {
-            if (hasAnswers) {
-                const completedCount = answerKey.filter(answer => answer !== '' && answer !== 'A').length;
-                const totalCount = answerKey.length;
-                preview.textContent = `${completedCount}/${totalCount} Set`;
-            } else {
-                preview.textContent = 'Not Set';
-            }
+            const completed = answerKey.filter(a => a !== '').length;
+            preview.textContent = completed > 0 ? `${completed}/${answerKey.length} Set` : 'Not Set';
         }
     }
 
-    // Student Evaluation Methods
+    // =====================
+    // Student Evaluation
+    // =====================
     setupStudentEvaluation() {
         if (!this.testData) return;
-        
-        // Update progress info
         const progressInfo = document.getElementById('studentProgress');
-        if (progressInfo) {
-            progressInfo.textContent = `Student ${this.currentStudent} of ${this.testData.totalStudents}`;
-        }
-        
-        // Generate page upload sections
+        if (progressInfo) progressInfo.textContent = `Student ${this.currentStudent} of ${this.testData.totalStudents}`;
         this.generatePageUploads();
-        
-        // Update summary stats
         this.updateEvaluationSummary();
-        
-        // Clear form
         document.getElementById('studentEvaluationForm')?.reset();
-        
-        // Hide analysis results
-        const analysisResults = document.getElementById('analysisResults');
-        if (analysisResults) {
-            analysisResults.style.display = 'none';
-        }
-        
-        // Show/hide buttons
+        const results = document.getElementById('analysisResults');
+        if (results) results.style.display = 'none';
         this.updateEvaluationButtons();
     }
 
     generatePageUploads() {
         const container = document.getElementById('pageUploadsContainer');
         if (!container || !this.testData) return;
-        
         container.innerHTML = '';
-        
         for (let i = 1; i <= this.testData.totalPages; i++) {
-            const pageUpload = document.createElement('div');
-            pageUpload.className = 'page-upload-item';
-            pageUpload.innerHTML = `
+            const div = document.createElement('div');
+            div.className = 'page-upload-item';
+            div.innerHTML = `
                 <div class="page-upload-header">
-                    <div class="page-upload-title">
-                        <i class="fas fa-file-image"></i>
-                        Page ${i}
-                    </div>
-                    <div class="page-upload-status" id="pageStatus_${i}">
-                        <i class="fas fa-upload"></i>
-                        Not Uploaded
-                    </div>
+                    <div class="page-upload-title"><i class="fas fa-file-image"></i> Page ${i}</div>
+                    <div class="page-upload-status" id="pageStatus_${i}"><i class="fas fa-upload"></i> Not Uploaded</div>
                 </div>
                 <div class="upload-area" onclick="document.getElementById('pageFile_${i}').click()">
                     <i class="fas fa-cloud-upload-alt"></i>
                     <h4>Upload Page ${i}</h4>
-                    <p>Click to select image file (JPG, PNG, PDF)</p>
+                    <p>Click to select image (JPG, PNG, PDF)</p>
                     <button type="button" class="upload-button">Choose File</button>
                     <input type="file" id="pageFile_${i}" name="answerSheet_${i}" accept="image/*,.pdf" style="display: none;">
                 </div>
                 <div class="page-preview" id="pagePreview_${i}">
                     <img class="preview-image" id="previewImage_${i}" alt="Page ${i} preview">
-                </div>
-            `;
-            container.appendChild(pageUpload);
-            
-            // Add file change listener
-            const fileInput = pageUpload.querySelector(`#pageFile_${i}`);
-            fileInput.addEventListener('change', (e) => {
-                this.handleFileUpload(e, i);
-            });
+                </div>`;
+            container.appendChild(div);
+            div.querySelector(`#pageFile_${i}`).addEventListener('change', (e) => this.handleFileUpload(e, i));
         }
     }
 
     handleFileUpload(e, pageNumber) {
         const file = e.target.files[0];
         if (!file) return;
-        
-        const statusElement = document.getElementById(`pageStatus_${pageNumber}`);
-        const previewElement = document.getElementById(`pagePreview_${pageNumber}`);
-        const previewImage = document.getElementById(`previewImage_${pageNumber}`);
-        
+        const status = document.getElementById(`pageStatus_${pageNumber}`);
+        const preview = document.getElementById(`pagePreview_${pageNumber}`);
+        const img = document.getElementById(`previewImage_${pageNumber}`);
         if (file.type.startsWith('image/')) {
             const reader = new FileReader();
-            reader.onload = (e) => {
-                previewImage.src = e.target.result;
-                previewElement.classList.add('active');
-                
-                if (statusElement) {
-                    statusElement.innerHTML = '<i class="fas fa-check-circle"></i> Uploaded';
-                    statusElement.classList.add('uploaded');
-                }
+            reader.onload = (ev) => {
+                if (img) img.src = ev.target.result;
+                if (preview) preview.classList.add('active');
+                if (status) { status.innerHTML = '<i class="fas fa-check-circle"></i> Uploaded'; status.classList.add('uploaded'); }
             };
             reader.readAsDataURL(file);
         } else {
-            // For PDF files
-            if (statusElement) {
-                statusElement.innerHTML = '<i class="fas fa-check-circle"></i> PDF Uploaded';
-                statusElement.classList.add('uploaded');
-            }
+            if (status) { status.innerHTML = '<i class="fas fa-check-circle"></i> PDF Uploaded'; status.classList.add('uploaded'); }
         }
-        
-        this.showToast(`Page ${pageNumber} uploaded successfully`, 'success');
+        this.showToast(`Page ${pageNumber} uploaded`, 'success');
     }
 
     async handleStudentEvaluation(e) {
         e.preventDefault();
-        
         const formData = new FormData(e.target);
         const studentName = formData.get('studentName');
         const rollNumber = formData.get('rollNumber');
-        
-        // Validate student data
-        if (!this.validateStudentData({ name: studentName, rollNumber: rollNumber })) {
+        if (!studentName?.trim() || !rollNumber?.trim()) {
+            this.showToast('Student name and roll number are required', 'error');
             return;
         }
-        
-        // Check if files are uploaded
         const uploadedFiles = this.getUploadedFiles();
         if (uploadedFiles.length < this.testData.totalPages) {
             this.showToast(`Please upload all ${this.testData.totalPages} pages`, 'error');
             return;
         }
-        
-        // Show loading and process evaluation
-        this.showLoading('Analyzing Answer Sheet...', 'AI is processing the uploaded images...');
+
+        // Calculate ETA based on previous evaluations
+        const completed = this.studentResults.length;
+        const total = this.testData.totalStudents;
+        const remaining = total - completed - 1;
+        let etaText = '';
+        if (this._evalTimes && this._evalTimes.length > 0) {
+            const avgTime = this._evalTimes.reduce((a, b) => a + b, 0) / this._evalTimes.length;
+            const etaSeconds = Math.round(avgTime * remaining / 1000);
+            const etaMin = Math.floor(etaSeconds / 60);
+            const etaSec = etaSeconds % 60;
+            etaText = ` | ETA for remaining ${remaining}: ~${etaMin}m ${etaSec}s`;
+        }
+
+        this.showLoading(
+            `Analyzing Student ${completed + 1} of ${total}...`,
+            `AI is processing ${this.testData.totalPages} page(s) with rate limiting${etaText}`
+        );
         this.updateProgressSteps(['completed', 'active', 'pending']);
         this.updateProgressBar(50);
-        
-        try {
-            // Prepare form data for API
-            const evaluationData = new FormData();
-            evaluationData.append('studentName', studentName);
-            evaluationData.append('rollNumber', rollNumber);
-            
-            // Add uploaded files
-            for (let i = 1; i <= this.testData.totalPages; i++) {
-                const fileInput = document.getElementById(`pageFile_${i}`);
-                if (fileInput && fileInput.files[0]) {
-                    evaluationData.append(`answerSheet_${i}`, fileInput.files[0]);
+
+        const startTime = Date.now();
+        const MAX_CLIENT_RETRIES = 3;
+
+        for (let attempt = 0; attempt < MAX_CLIENT_RETRIES; attempt++) {
+            try {
+                const evalData = new FormData();
+                evalData.append('studentName', studentName);
+                evalData.append('rollNumber', rollNumber);
+                for (let i = 1; i <= this.testData.totalPages; i++) {
+                    const fi = document.getElementById(`pageFile_${i}`);
+                    if (fi?.files[0]) evalData.append(`answerSheet_${i}`, fi.files[0]);
                 }
-            }
-            
-            const response = await this.apiCall('/student/evaluate', 'POST', evaluationData, true);
-            
-            if (response.success) {
+
+                const url = `${this.API_BASE_URL}/api/student/evaluate`;
+                const response = await fetch(url, { method: 'POST', body: evalData });
+                const result = await response.json();
+
+                // Update rate limiter UI from response
+                if (result.rateLimiter) {
+                    this._updateRateLimiterFromResponse(result.rateLimiter);
+                }
+
+                if (response.status === 429 || (result.error && result.error.toLowerCase().includes('rate'))) {
+                    // Rate limited — wait and retry
+                    const waitSec = Math.pow(3, attempt + 1);
+                    this.showLoading(
+                        `Rate limited — waiting ${waitSec}s before retry...`,
+                        `Attempt ${attempt + 2}/${MAX_CLIENT_RETRIES} | Student ${completed + 1} of ${total}`
+                    );
+                    this.showToast(`API rate limited. Waiting ${waitSec}s before retry...`, 'warning');
+                    await new Promise(r => setTimeout(r, waitSec * 1000));
+                    continue;
+                }
+
+                if (!response.ok) {
+                    throw new Error(result.error || `Server error: ${response.status}`);
+                }
+
+                if (result.success) {
+                    const elapsed = Date.now() - startTime;
+                    if (!this._evalTimes) this._evalTimes = [];
+                    this._evalTimes.push(elapsed);
+
+                    this.hideLoading();
+                    this.displayAnalysisResults(result.evaluation);
+                    this.updateProgressSteps(['completed', 'completed', 'completed']);
+                    this.updateProgressBar(100);
+                    this.studentResults.push(result.evaluation);
+                    this.updateEvaluationSummary();
+
+                    const timeStr = (elapsed / 1000).toFixed(1);
+                    this.showToast(`Student ${completed + 1}/${total} complete (${timeStr}s)`, 'success');
+                    this.updateRateLimiterUI();
+                    return; // Success — exit retry loop
+                } else {
+                    throw new Error(result.error || 'Unknown error');
+                }
+            } catch (error) {
+                if (attempt < MAX_CLIENT_RETRIES - 1 && error.message?.includes('rate')) {
+                    const waitSec = Math.pow(3, attempt + 1);
+                    this.showLoading(`Retrying in ${waitSec}s...`, `Error: ${error.message}`);
+                    await new Promise(r => setTimeout(r, waitSec * 1000));
+                    continue;
+                }
                 this.hideLoading();
-                this.displayAnalysisResults(response.evaluation);
-                this.updateProgressSteps(['completed', 'completed', 'completed']);
-                this.updateProgressBar(100);
-                
-                // Store results
-                this.studentResults.push(response.evaluation);
-                
-                this.showToast('Analysis complete!', 'success');
-            } else {
-                throw new Error(response.error);
+                this.showToast(`Evaluation failed: ${error.message}`, 'error');
+                this.updateProgressSteps(['completed', 'error', 'pending']);
+                return;
             }
-        } catch (error) {
-            this.hideLoading();
-            this.showToast(`Evaluation failed: ${error.message}`, 'error');
-            this.updateProgressSteps(['completed', 'error', 'pending']);
         }
+        this.hideLoading();
+        this.showToast('Evaluation failed after multiple retries. Try pausing and resuming from Admin panel.', 'error');
     }
 
-    validateStudentData(data) {
-        const errors = [];
-        
-        if (!data.name.trim()) errors.push('Student name is required');
-        if (!data.rollNumber.trim()) errors.push('Roll number is required');
-        
-        if (errors.length > 0) {
-            this.showToast(errors.join('<br>'), 'error');
-            return false;
-        }
-        
-        return true;
+    _updateRateLimiterFromResponse(rl) {
+        const rpmEl = document.getElementById('rlRpmCount');
+        const dayEl = document.getElementById('rlDayCount');
+        if (rpmEl) rpmEl.textContent = `${rl.remainingRPM}/${rl.maxRPM}`;
+        if (dayEl) dayEl.textContent = `${rl.remainingRPD}/${rl.maxRPD}`;
+        // Also update loading overlay tokens
+        const loadRpm = document.getElementById('loadingRpm');
+        const loadRpd = document.getElementById('loadingRpd');
+        if (loadRpm) loadRpm.textContent = `${rl.remainingRPM}/${rl.maxRPM}`;
+        if (loadRpd) loadRpd.textContent = `${rl.remainingRPD}/${rl.maxRPD}`;
     }
 
     getUploadedFiles() {
         const files = [];
         for (let i = 1; i <= this.testData.totalPages; i++) {
-            const fileInput = document.getElementById(`pageFile_${i}`);
-            if (fileInput && fileInput.files[0]) {
-                files.push(fileInput.files[0]);
-            }
+            const fi = document.getElementById(`pageFile_${i}`);
+            if (fi?.files[0]) files.push(fi.files[0]);
         }
         return files;
     }
 
     displayAnalysisResults(evaluation) {
-        const resultsSection = document.getElementById('analysisResults');
-        if (!resultsSection) return;
-        
-        const summary = evaluation.summary;
-        
-        // Update score display
-        document.getElementById('scoreValue').textContent = summary.obtainedMarks;
-        document.getElementById('totalMarksDisplay').textContent = summary.totalMarks;
-        document.getElementById('percentageValue').textContent = summary.percentage;
-        
-        // Update analysis details
-        document.getElementById('correctAnswers').textContent = summary.correctAnswers;
-        document.getElementById('wrongAnswers').textContent = summary.totalQuestions - summary.correctAnswers;
-        document.getElementById('gradeDisplay').textContent = summary.grade;
-        
-        // Update question results table
+        const section = document.getElementById('analysisResults');
+        if (!section) return;
+        const s = evaluation.summary;
+        document.getElementById('scoreValue').textContent = s.obtainedMarks;
+        document.getElementById('totalMarksDisplay').textContent = s.totalMarks;
+        document.getElementById('percentageValue').textContent = s.percentage;
+        document.getElementById('correctAnswers').textContent = s.correctAnswers;
+        document.getElementById('wrongAnswers').textContent = s.totalQuestions - s.correctAnswers;
+        document.getElementById('gradeDisplay').textContent = s.grade;
         this.populateQuestionResults(evaluation.results);
-        
-        // Show results section
-        resultsSection.style.display = 'block';
-        resultsSection.scrollIntoView({ behavior: 'smooth' });
-        
-        // Update buttons
+        section.style.display = 'block';
+        section.scrollIntoView({ behavior: 'smooth' });
         this.updateEvaluationButtons(true);
     }
 
-    populateQuestionResults(questionResults) {
+    populateQuestionResults(results) {
         const tbody = document.getElementById('questionResultsBody');
         if (!tbody) return;
-        
         tbody.innerHTML = '';
-        
-        questionResults.forEach(result => {
+        results.forEach(r => {
             const row = document.createElement('tr');
-            row.innerHTML = `
-                <td>${result.questionNo}</td>
-                <td><strong>${result.correctAnswer}</strong></td>
-                <td><strong>${result.studentAnswer}</strong></td>
-                <td>
-                    <span class="status-${result.isCorrect ? 'correct' : 'incorrect'}">
-                        <i class="fas fa-${result.isCorrect ? 'check' : 'times'}"></i>
-                        ${result.isCorrect ? 'Correct' : 'Incorrect'}
-                    </span>
-                </td>
-                <td>${result.marks}</td>
-            `;
+            row.innerHTML = `<td>${r.questionNo}</td><td><strong>${r.correctAnswer}</strong></td><td><strong>${r.studentAnswer}</strong></td><td><span class="status-${r.isCorrect ? 'correct' : 'incorrect'}"><i class="fas fa-${r.isCorrect ? 'check' : 'times'}"></i> ${r.isCorrect ? 'Correct' : 'Incorrect'}</span></td><td>${r.marks}</td>`;
             tbody.appendChild(row);
         });
     }
 
-    updateEvaluationButtons(analysisComplete = false) {
-        const analyzeBtn = document.getElementById('analyzeBtn');
-        const nextBtn = document.getElementById('nextStudentBtn');
-        const finishBtn = document.getElementById('finishEvaluationBtn');
-        
-        if (analysisComplete) {
-            if (analyzeBtn) analyzeBtn.style.display = 'none';
-            
+    updateEvaluationButtons(done = false) {
+        const analyze = document.getElementById('analyzeBtn');
+        const next = document.getElementById('nextStudentBtn');
+        const finish = document.getElementById('finishEvaluationBtn');
+        if (done) {
+            if (analyze) analyze.style.display = 'none';
             if (this.currentStudent < this.testData.totalStudents) {
-                if (nextBtn) nextBtn.style.display = 'inline-flex';
-                if (finishBtn) finishBtn.style.display = 'none';
+                if (next) next.style.display = 'inline-flex';
+                if (finish) finish.style.display = 'none';
             } else {
-                if (nextBtn) nextBtn.style.display = 'none';
-                if (finishBtn) finishBtn.style.display = 'inline-flex';
+                if (next) next.style.display = 'none';
+                if (finish) finish.style.display = 'inline-flex';
             }
         } else {
-            if (analyzeBtn) analyzeBtn.style.display = 'inline-flex';
-            if (nextBtn) nextBtn.style.display = 'none';
-            if (finishBtn) finishBtn.style.display = 'none';
+            if (analyze) analyze.style.display = 'inline-flex';
+            if (next) next.style.display = 'none';
+            if (finish) finish.style.display = 'none';
         }
     }
 
     updateProgressSteps(states) {
-        const steps = document.querySelectorAll('.progress-step');
-        states.forEach((state, index) => {
-            if (steps[index]) {
-                steps[index].className = `progress-step ${state}`;
-            }
+        document.querySelectorAll('.progress-step').forEach((step, i) => {
+            if (states[i]) step.className = `progress-step ${states[i]}`;
         });
     }
 
-    updateProgressBar(percentage) {
-        const progressFill = document.querySelector('.progress-fill');
-        if (progressFill) {
-            progressFill.style.width = `${percentage}%`;
-        }
+    updateProgressBar(pct) {
+        const fill = document.querySelector('.progress-fill');
+        if (fill) fill.style.width = `${pct}%`;
     }
 
     updateEvaluationSummary() {
         const completed = this.studentResults.length;
         const total = this.testData ? this.testData.totalStudents : 0;
-        const remaining = total - completed;
-        
-        const completedElement = document.getElementById('completedCount');
-        const remainingElement = document.getElementById('remainingCount');
-        const totalElement = document.getElementById('totalStudentsCount');
-        
-        if (completedElement) completedElement.textContent = completed;
-        if (remainingElement) remainingElement.textContent = remaining;
-        if (totalElement) totalElement.textContent = total;
+        const el1 = document.getElementById('completedCount');
+        const el2 = document.getElementById('remainingCount');
+        const el3 = document.getElementById('totalStudentsCount');
+        if (el1) el1.textContent = completed;
+        if (el2) el2.textContent = total - completed;
+        if (el3) el3.textContent = total;
     }
 
     nextStudent() {
         this.currentStudent++;
         this.updateEvaluationSummary();
         this.setupStudentEvaluation();
-        
-        // Scroll to top
         document.getElementById('studentEvaluation')?.scrollIntoView({ behavior: 'smooth' });
     }
 
     finishEvaluation() {
-        // Save the consolidated report
         this.saveConsolidatedReport();
-        
-        // Navigate to consolidated report
         this.setupConsolidatedReport();
         this.navigateTo('consolidatedReport');
     }
 
-    // Enhanced Consolidated Report Methods with Statistics
+    // =====================
+    // Consolidated Report
+    // =====================
     setupConsolidatedReport() {
         const stats = this.calculateEvaluationStats();
-        
-        // Update stats cards with detailed information
         this.updateConsolidatedStatsDisplay(stats);
-        
-        // Populate results table
         this.populateConsolidatedTable();
     }
 
     calculateEvaluationStats() {
-        if (!this.studentResults.length) {
-            return {
-                totalStudents: 0,
-                averageScore: 0,
-                averageMarks: 0,
-                highestScore: 0,
-                lowestScore: 0,
-                passRate: 0,
-                passedCount: 0,
-                failedCount: 0,
-                totalMarksAwarded: 0,
-                totalPossibleMarks: 0
-            };
-        }
-
-        const totalStudents = this.studentResults.length;
+        if (!this.studentResults.length) return { totalStudents: 0, averageScore: 0, averageMarks: 0, highestScore: 0, lowestScore: 0, passRate: 0, passedCount: 0, failedCount: 0, totalMarksAwarded: 0, totalPossibleMarks: 0 };
+        const n = this.studentResults.length;
         const scores = this.studentResults.map(r => r.summary.percentage);
         const marks = this.studentResults.map(r => r.summary.obtainedMarks);
-        
-        const totalScore = scores.reduce((sum, score) => sum + score, 0);
-        const totalMarksAwarded = marks.reduce((sum, mark) => sum + mark, 0);
-        const averageScore = Math.round(totalScore / totalStudents);
-        const averageMarks = Math.round(totalMarksAwarded / totalStudents);
-        const highestScore = Math.max(...scores);
-        const lowestScore = Math.min(...scores);
+        const totalMarksAwarded = marks.reduce((a, b) => a + b, 0);
         const passedCount = this.studentResults.filter(r => r.summary.status === 'PASS').length;
-        const failedCount = totalStudents - passedCount;
-        const passRate = Math.round((passedCount / totalStudents) * 100);
-        const totalPossibleMarks = this.testData ? this.testData.totalQuestions * this.testData.marksPerQuestion * totalStudents : 0;
-        
+        const totalPossibleMarks = this.testData ? this.testData.totalQuestions * this.testData.marksPerQuestion * n : 0;
         return {
-            totalStudents,
-            averageScore,
-            averageMarks,
-            highestScore,
-            lowestScore,
-            passRate,
-            passedCount,
-            failedCount,
-            totalMarksAwarded,
-            totalPossibleMarks
+            totalStudents: n,
+            averageScore: Math.round(scores.reduce((a, b) => a + b, 0) / n),
+            averageMarks: Math.round(totalMarksAwarded / n),
+            highestScore: Math.max(...scores),
+            lowestScore: Math.min(...scores),
+            passRate: Math.round((passedCount / n) * 100),
+            passedCount, failedCount: n - passedCount, totalMarksAwarded, totalPossibleMarks
         };
     }
 
     updateConsolidatedStatsDisplay(stats) {
-        // Update existing stats
-        const totalElement = document.getElementById('consolidatedTotalStudents');
-        const avgElement = document.getElementById('consolidatedAvgScore');
-        const highestElement = document.getElementById('consolidatedHighestScore');
-        const passRateElement = document.getElementById('consolidatedPassRate');
-        
-        if (totalElement) totalElement.textContent = stats.totalStudents;
-        if (avgElement) avgElement.textContent = stats.averageScore + '%';
-        if (highestElement) highestElement.textContent = stats.highestScore + '%';
-        if (passRateElement) passRateElement.textContent = stats.passRate + '%';
-        
-        // Add additional statistics display
-        const additionalStatsContainer = document.getElementById('additionalStats');
-        if (additionalStatsContainer) {
-            additionalStatsContainer.innerHTML = `
-                <div class="additional-stats">
-                    <div class="stat-item">
-                        <span class="stat-label">Students Passed:</span>
-                        <span class="stat-value">${stats.passedCount}</span>
-                    </div>
-                    <div class="stat-item">
-                        <span class="stat-label">Students Failed:</span>
-                        <span class="stat-value">${stats.failedCount}</span>
-                    </div>
-                    <div class="stat-item">
-                        <span class="stat-label">Average Marks:</span>
-                        <span class="stat-value">${stats.averageMarks} / ${this.testData ? this.testData.totalQuestions * this.testData.marksPerQuestion : 0}</span>
-                    </div>
-                    <div class="stat-item">
-                        <span class="stat-label">Lowest Score:</span>
-                        <span class="stat-value">${stats.lowestScore}%</span>
-                    </div>
-                    <div class="stat-item">
-                        <span class="stat-label">Total Marks Awarded:</span>
-                        <span class="stat-value">${stats.totalMarksAwarded} / ${stats.totalPossibleMarks}</span>
-                    </div>
-                </div>
-            `;
+        const el = (id) => document.getElementById(id);
+        if (el('consolidatedTotalStudents')) el('consolidatedTotalStudents').textContent = stats.totalStudents;
+        if (el('consolidatedAvgScore')) el('consolidatedAvgScore').textContent = stats.averageScore + '%';
+        if (el('consolidatedHighestScore')) el('consolidatedHighestScore').textContent = stats.highestScore + '%';
+        if (el('consolidatedPassRate')) el('consolidatedPassRate').textContent = stats.passRate + '%';
+        const addEl = el('additionalStats');
+        if (addEl) {
+            addEl.innerHTML = `<div class="additional-stats"><div class="stat-item"><span class="stat-label">Passed:</span><span class="stat-value">${stats.passedCount}</span></div><div class="stat-item"><span class="stat-label">Failed:</span><span class="stat-value">${stats.failedCount}</span></div><div class="stat-item"><span class="stat-label">Average Marks:</span><span class="stat-value">${stats.averageMarks} / ${this.testData ? this.testData.totalQuestions * this.testData.marksPerQuestion : 0}</span></div><div class="stat-item"><span class="stat-label">Lowest:</span><span class="stat-value">${stats.lowestScore}%</span></div></div>`;
         }
     }
 
-    // Enhanced Reports Management with Statistics Display
+    populateConsolidatedTable() {
+        const tbody = document.getElementById('consolidatedResultsBody');
+        if (!tbody) return;
+        tbody.innerHTML = '';
+        this.studentResults.forEach((result, index) => {
+            const s = result.summary;
+            const reportId = this.testData?.testId ? `${this.testData.testId}_${result.rollNumber}` : `RPT_${index}_${result.rollNumber}`;
+            const row = document.createElement('tr');
+            row.innerHTML = `<td>${reportId}</td><td>${result.rollNumber}</td><td>${result.studentName}</td><td>${this.testData?.testTitle || 'N/A'}</td><td><span class="score-badge">${s.percentage}%</span></td><td><span class="grade-badge">${s.grade}</span></td><td>${s.status}</td>`;
+            tbody.appendChild(row);
+        });
+    }
+
+    // =====================
+    // Reports
+    // =====================
     async loadReports() {
         try {
             const response = await this.apiCall('/reports/consolidated');
-            
             if (response.success) {
                 this.allReports = response.consolidatedReports || [];
                 this.calculateAllReportsStats(response.stats || {});
                 this.populateConsolidatedReportsTable();
-            } else {
-                throw new Error(response.error);
             }
         } catch (error) {
-            console.error('Failed to load consolidated reports:', error);
-            this.showToast(`Failed to load consolidated reports: ${error.message}`, 'error');
-            // Set fallback empty state
+            console.error('Failed to load reports:', error);
             this.allReports = [];
             this.populateConsolidatedReportsTable();
         }
     }
 
-    calculateAllReportsStats(serverStats) {
-        // Calculate comprehensive statistics from all reports
-        let totalTests = this.allReports.length;
-        let totalStudentsEvaluated = 0;
-        let totalPassed = 0;
-        let totalFailed = 0;
-        let allScores = [];
-        let totalMarksAwarded = 0;
-        let totalPossibleMarks = 0;
-        
-        this.allReports.forEach(report => {
-            totalStudentsEvaluated += report.totalStudents || 0;
-            totalPassed += report.passedCount || 0;
-            totalFailed += (report.totalStudents || 0) - (report.passedCount || 0);
-            
-            if (report.studentResults) {
-                report.studentResults.forEach(result => {
-                    allScores.push(result.summary.percentage);
-                    totalMarksAwarded += result.summary.obtainedMarks || 0;
-                    totalPossibleMarks += result.summary.totalMarks || 0;
-                });
-            }
+    calculateAllReportsStats() {
+        let totalStudentsEvaluated = 0, totalPassed = 0, allScores = [];
+        this.allReports.forEach(r => {
+            totalStudentsEvaluated += r.totalStudents || 0;
+            totalPassed += r.passedCount || 0;
+            if (r.studentResults) r.studentResults.forEach(s => allScores.push(s.summary.percentage));
         });
-        
-        const overallPassRate = totalStudentsEvaluated > 0 ? Math.round((totalPassed / totalStudentsEvaluated) * 100) : 0;
-        const overallAverage = allScores.length > 0 ? Math.round(allScores.reduce((a, b) => a + b, 0) / allScores.length) : 0;
-        
-        const calculatedStats = {
-            totalTests,
-            totalStudentsEvaluated,
-            totalPassed,
-            totalFailed,
-            overallPassRate,
-            overallAverage,
+        const stats = {
+            totalTests: this.allReports.length,
+            totalStudentsEvaluated, totalPassed,
+            totalFailed: totalStudentsEvaluated - totalPassed,
+            overallPassRate: totalStudentsEvaluated > 0 ? Math.round((totalPassed / totalStudentsEvaluated) * 100) : 0,
+            overallAverage: allScores.length > 0 ? Math.round(allScores.reduce((a, b) => a + b, 0) / allScores.length) : 0,
             highestScore: allScores.length > 0 ? Math.max(...allScores) : 0,
-            lowestScore: allScores.length > 0 ? Math.min(...allScores) : 0,
-            totalMarksAwarded,
-            totalPossibleMarks,
-            averageMarksPerStudent: totalStudentsEvaluated > 0 ? Math.round(totalMarksAwarded / totalStudentsEvaluated) : 0
+            lowestScore: allScores.length > 0 ? Math.min(...allScores) : 0
         };
-        
-        // Update stats display
-        this.updateReportsStatsDisplay(calculatedStats);
-        
-        return calculatedStats;
+        this.updateReportsStatsDisplay(stats);
     }
 
     updateReportsStatsDisplay(stats) {
-        // Update main stats cards
-        const totalElement = document.getElementById('totalReports');
-        const studentsElement = document.getElementById('totalStudentsEvaluated');
-        const avgElement = document.getElementById('overallAverage');
-        const recentElement = document.getElementById('recentTests');
-        
-        if (totalElement) totalElement.textContent = stats.totalTests;
-        if (studentsElement) studentsElement.textContent = stats.totalStudentsEvaluated;
-        if (avgElement) avgElement.textContent = stats.overallAverage + '%';
-        if (recentElement) recentElement.textContent = stats.totalTests;
-        
-        // Add detailed statistics section
-        const detailedStatsContainer = document.getElementById('detailedReportsStats');
-        if (detailedStatsContainer) {
-            detailedStatsContainer.innerHTML = `
-                <div class="detailed-stats-grid">
-                    <div class="stat-card">
-                        <h4>Pass/Fail Analysis</h4>
-                        <div class="stat-details">
-                            <div class="stat-line">
-                                <span>Students Passed: </span>
-                                <span class="stat-value">${stats.totalPassed}</span>
-                            </div>
-                            <div class="stat-line">
-                                <span>Students Failed: </span>
-                                <span class="stat-value">${stats.totalFailed}</span>
-                            </div>
-                            <div class="stat-line">
-                                <span>Pass Rate: </span>
-                                <span class="stat-value">${stats.overallPassRate}%</span>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="stat-card">
-                        <h4>Score Analysis</h4>
-                        <div class="stat-details">
-                            <div class="stat-line">
-                                <span>Average Score: </span>
-                                <span class="stat-value">${stats.overallAverage}%</span>
-                            </div>
-                            <div class="stat-line">
-                                <span>Highest Score: </span>
-                                <span class="stat-value">${stats.highestScore}%</span>
-                            </div>
-                            <div class="stat-line">
-                                <span>Lowest Score: </span>
-                                <span class="stat-value">${stats.lowestScore}%</span>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="stat-card">
-                        <h4>Marks Distribution</h4>
-                        <div class="stat-details">
-                            <div class="stat-line">
-                                <span>Total Marks Awarded: </span>
-                                <span class="stat-value">${stats.totalMarksAwarded}</span>
-                            </div>
-                            <div class="stat-line">
-                                <span>Total Possible Marks: </span>
-                                <span class="stat-value">${stats.totalPossibleMarks}</span>
-                            </div>
-                            <div class="stat-line">
-                                <span>Average Marks Per Student: </span>
-                                <span class="stat-value">${stats.averageMarksPerStudent}</span>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            `;
+        const el = (id) => document.getElementById(id);
+        if (el('totalReports')) el('totalReports').textContent = stats.totalTests;
+        if (el('totalStudentsEvaluated')) el('totalStudentsEvaluated').textContent = stats.totalStudentsEvaluated;
+        if (el('overallAverage')) el('overallAverage').textContent = stats.overallAverage + '%';
+        if (el('recentTests')) el('recentTests').textContent = stats.totalTests;
+        const detailed = el('detailedReportsStats');
+        if (detailed) {
+            detailed.innerHTML = `<div class="detailed-stats-grid"><div class="stat-card"><h4>Pass/Fail</h4><div class="stat-details"><div class="stat-line"><span>Passed:</span><span class="stat-value">${stats.totalPassed}</span></div><div class="stat-line"><span>Failed:</span><span class="stat-value">${stats.totalFailed}</span></div><div class="stat-line"><span>Rate:</span><span class="stat-value">${stats.overallPassRate}%</span></div></div></div><div class="stat-card"><h4>Scores</h4><div class="stat-details"><div class="stat-line"><span>Average:</span><span class="stat-value">${stats.overallAverage}%</span></div><div class="stat-line"><span>Highest:</span><span class="stat-value">${stats.highestScore}%</span></div><div class="stat-line"><span>Lowest:</span><span class="stat-value">${stats.lowestScore}%</span></div></div></div></div>`;
         }
     }
 
     populateConsolidatedReportsTable() {
         const tbody = document.getElementById('reportsTableBody');
-        const emptyState = document.getElementById('emptyReports');
-        
+        const empty = document.getElementById('emptyReports');
         if (!tbody) return;
-        
         tbody.innerHTML = '';
-        
-        if (this.allReports.length === 0) {
-            if (emptyState) emptyState.style.display = 'block';
-            return;
-        }
-        
-        if (emptyState) emptyState.style.display = 'none';
-        
+        if (this.allReports.length === 0) { if (empty) empty.style.display = 'block'; return; }
+        if (empty) empty.style.display = 'none';
         this.allReports.forEach((report, index) => {
             const row = document.createElement('tr');
             const date = new Date(report.completedAt).toLocaleDateString('en-GB');
-            
-            row.innerHTML = `
-                <td>${report.testId || 'N/A'}</td>
-                <td>${report.testTitle || 'N/A'}</td>
-                <td>${report.staffName || 'N/A'}</td>
-                <td>${date}</td>
-                <td>${report.totalStudents || 0}</td>
-                <td><span class="score-badge">${report.averageScore || 0}%</span></td>
-                <td><span class="score-badge">${report.passRate || 0}%</span></td>
-                <td>
-                    <div class="action-buttons">
-                        <button class="action-button view" onclick="app.viewConsolidatedReport(${index})">
-                            <i class="fas fa-eye"></i> View
-                        </button>
-                        <button class="action-button download" onclick="app.downloadConsolidatedReport(${index})">
-                            <i class="fas fa-download"></i> Export
-                        </button>
-                        <button class="action-button delete" onclick="app.deleteConsolidatedReport(${index})">
-                            <i class="fas fa-trash"></i> Delete
-                        </button>
-                    </div>
-                </td>
-            `;
+            row.innerHTML = `<td>${report.testId || 'N/A'}</td><td>${report.testTitle || 'N/A'}</td><td>${report.staffName || 'N/A'}</td><td>${date}</td><td>${report.totalStudents || 0}</td><td><span class="score-badge">${report.averageScore || 0}%</span></td><td><span class="score-badge">${report.passRate || 0}%</span></td><td><div class="action-buttons"><button class="action-button view" onclick="app.viewConsolidatedReport(${index})"><i class="fas fa-eye"></i> View</button><button class="action-button download" onclick="app.downloadConsolidatedReport(${index})"><i class="fas fa-download"></i></button><button class="action-button delete" onclick="app.deleteConsolidatedReport(${index})"><i class="fas fa-trash"></i></button></div></td>`;
             tbody.appendChild(row);
         });
     }
 
     filterReports(filter) {
-        // Implement filtering logic based on filter value
-        if (!filter || filter === 'all') {
-            this.populateConsolidatedReportsTable();
-            return;
-        }
-        
-        let filteredReports = [...this.allReports];
-        
+        if (!filter || filter === 'all') { this.populateConsolidatedReportsTable(); return; }
+        let filtered = [...this.allReports];
         switch (filter) {
             case 'recent':
-                // Show reports from last 30 days
-                const thirtyDaysAgo = new Date();
-                thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-                filteredReports = this.allReports.filter(report => 
-                    new Date(report.completedAt) >= thirtyDaysAgo
-                );
+                const cutoff = new Date(); cutoff.setDate(cutoff.getDate() - 30);
+                filtered = this.allReports.filter(r => new Date(r.completedAt) >= cutoff);
                 break;
             case 'high-pass-rate':
-                // Show reports with pass rate >= 80%
-                filteredReports = this.allReports.filter(report => 
-                    (report.passRate || 0) >= 80
-                );
+                filtered = this.allReports.filter(r => (r.passRate || 0) >= 80);
                 break;
             case 'low-pass-rate':
-                // Show reports with pass rate < 50%
-                filteredReports = this.allReports.filter(report => 
-                    (report.passRate || 0) < 50
-                );
+                filtered = this.allReports.filter(r => (r.passRate || 0) < 50);
                 break;
         }
-        
-        // Temporarily replace allReports for display
-        const originalReports = this.allReports;
-        this.allReports = filteredReports;
+        const orig = this.allReports;
+        this.allReports = filtered;
         this.populateConsolidatedReportsTable();
-        this.allReports = originalReports;
+        this.allReports = orig;
     }
 
-    // View consolidated report
     viewConsolidatedReport(index) {
         const report = this.allReports[index];
         if (!report) return;
-        
-        // Set up the consolidated report data
-        this.testData = {
-            testId: report.testId,
-            testTitle: report.testTitle,
-            staffName: report.staffName,
-            totalStudents: report.totalStudents,
-            totalQuestions: report.totalQuestions,
-            marksPerQuestion: report.marksPerQuestion,
-            passingMarks: report.passingMarks
-        };
-        
+        this.testData = { testId: report.testId, testTitle: report.testTitle, staffName: report.staffName, totalStudents: report.totalStudents, totalQuestions: report.totalQuestions, marksPerQuestion: report.marksPerQuestion, passingMarks: report.passingMarks };
         this.studentResults = report.studentResults || [];
         this.setupConsolidatedReport();
         this.navigateTo('consolidatedReport');
     }
 
-    // Download individual consolidated report with enhanced format
-    async downloadConsolidatedReport(index) {
+    downloadConsolidatedReport(index) {
         const report = this.allReports[index];
         if (!report) return;
-        
-        try {
-            // Set temporary data for export
-            const originalTestData = this.testData;
-            const originalStudentResults = this.studentResults;
-            
-            this.testData = {
-                testId: report.testId,
-                testTitle: report.testTitle,
-                staffName: report.staffName,
-                totalStudents: report.totalStudents,
-                totalQuestions: report.totalQuestions,
-                marksPerQuestion: report.marksPerQuestion,
-                passingMarks: report.passingMarks
-            };
-            this.studentResults = report.studentResults || [];
-            
-            // Generate and export
-            this.generateClientSideExcel();
-            
-            // Restore original data
-            this.testData = originalTestData;
-            this.studentResults = originalStudentResults;
-            
-        } catch (error) {
-            this.showToast(`Export failed: ${error.message}`, 'error');
-        }
+        const orig = { td: this.testData, sr: this.studentResults };
+        this.testData = { testId: report.testId, testTitle: report.testTitle, staffName: report.staffName, totalStudents: report.totalStudents, totalQuestions: report.totalQuestions, marksPerQuestion: report.marksPerQuestion, passingMarks: report.passingMarks };
+        this.studentResults = report.studentResults || [];
+        this.generateClientSideExcel();
+        this.testData = orig.td;
+        this.studentResults = orig.sr;
     }
 
-    // Delete consolidated report
     deleteConsolidatedReport(index) {
         const report = this.allReports[index];
         if (!report) return;
-        
-        this.confirmAction(
-            'Delete Consolidated Report',
-            `This will permanently delete the entire test report for "${report.testTitle}" including all ${report.totalStudents} student evaluations. This action cannot be undone.`,
-            async () => {
-                try {
-                    const response = await this.apiCall(`/reports/consolidated/${report.testId}`, 'DELETE');
-                    
-                    if (response.success) {
-                        this.allReports.splice(index, 1);
-                        this.populateConsolidatedReportsTable();
-                        this.calculateAllReportsStats();
-                        this.showToast('Consolidated report deleted successfully', 'success');
-                        this.loadDashboardStats(); // Refresh dashboard stats
-                    } else {
-                        throw new Error(response.error);
-                    }
-                } catch (error) {
-                    this.showToast(`Failed to delete report: ${error.message}`, 'error');
-                }
+        this.confirmAction('Delete Report', `Delete "${report.testTitle}"? This cannot be undone.`, async () => {
+            try {
+                await this.apiCall(`/reports/consolidated/${report.testId}`, 'DELETE');
+                this.allReports.splice(index, 1);
+                this.populateConsolidatedReportsTable();
+                this.calculateAllReportsStats();
+                this.showToast('Report deleted', 'success');
+                this.loadDashboardStats();
+            } catch (error) {
+                this.showToast(`Delete failed: ${error.message}`, 'error');
             }
-        );
+        });
     }
 
-    // Save consolidated report after completing evaluation
     async saveConsolidatedReport() {
-        if (!this.testData || !this.studentResults.length) {
-            return;
-        }
-        
+        if (!this.testData || !this.studentResults.length) return;
         try {
             const stats = this.calculateEvaluationStats();
-            const consolidatedData = {
-                testId: this.testData.testId,
-                testTitle: this.testData.testTitle,
-                staffName: this.testData.staffName,
-                totalStudents: this.testData.totalStudents,
-                totalQuestions: this.testData.totalQuestions,
-                marksPerQuestion: this.testData.marksPerQuestion,
-                passingMarks: this.testData.passingMarks,
-                completedAt: new Date().toISOString(),
-                studentResults: this.studentResults,
-                averageScore: stats.averageScore,
-                averageMarks: stats.averageMarks,
-                highestScore: stats.highestScore,
-                lowestScore: stats.lowestScore,
-                passRate: stats.passRate,
-                passedCount: stats.passedCount,
-                failedCount: stats.failedCount,
-                totalMarksAwarded: stats.totalMarksAwarded,
-                totalPossibleMarks: stats.totalPossibleMarks
-            };
-            
-            // Add to local reports array for demonstration
-            this.allReports.push(consolidatedData);
-            
-            const response = await this.apiCall('/reports/consolidated/save', 'POST', { consolidatedReport: consolidatedData });
-            
-            if (response.success) {
-                this.showToast('Test results saved successfully', 'success');
-            } else {
-                throw new Error(response.error);
-            }
+            const data = { testId: this.testData.testId, testTitle: this.testData.testTitle, staffName: this.testData.staffName, totalStudents: this.testData.totalStudents, totalQuestions: this.testData.totalQuestions, marksPerQuestion: this.testData.marksPerQuestion, passingMarks: this.testData.passingMarks, completedAt: new Date().toISOString(), studentResults: this.studentResults, ...stats };
+            this.allReports.push(data);
+            await this.apiCall('/reports/consolidated/save', 'POST', { consolidatedReport: data });
+            this.showToast('Results saved', 'success');
         } catch (error) {
-            console.error('Failed to save consolidated report:', error);
-            this.showToast('Warning: Failed to save consolidated report', 'warning');
+            console.error('Save failed:', error);
+            this.showToast('Warning: Failed to save report to server', 'warning');
         }
     }
 
-populateConsolidatedTable() {
-    const tbody = document.getElementById('consolidatedResultsBody');
-    if (!tbody) return;
-
-    tbody.innerHTML = '';
-
-    this.studentResults.forEach((result, index) => {
-        const row = document.createElement('tr');
-        const summary = result.summary;
-
-        // Unique Report ID using testId + rollNumber
-        const reportId = this.testData.testId 
-            ? `${this.testData.testId}_${result.rollNumber}`
-            : `${Date.now()}_${index}_${result.rollNumber}`;
-
-        row.innerHTML = `
-            <td>${reportId}</td>
-            <td>${result.rollNumber}</td>
-            <td>${result.studentName}</td>
-            <td>${this.testData.testTitle}</td>
-            <td><span class="score-badge">${summary.percentage}%</span></td>
-            <td><span class="grade-badge">${summary.grade}</span></td>
-            <td>${summary.status}</td>
-        `;
-        tbody.appendChild(row);
-    });
-}
-
-
-
-    // Enhanced Excel Export Methods with Custom Format
+    // =====================
+    // Excel Export
+    // =====================
     async exportConsolidatedReport() {
-        if (!this.testData || !this.studentResults.length) {
-            this.showToast('No data available for export', 'error');
-            return;
-        }
-        
+        if (!this.testData || !this.studentResults.length) { this.showToast('No data', 'error'); return; }
         try {
-            // Generate Excel data in the specified format
             const excelData = this.generateExcelData();
-            
-            // If backend supports custom Excel generation
-            const response = await fetch(`${this.API_BASE_URL}/api/reports/consolidated/export-custom`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify(excelData)
-            });
-            
+            const response = await fetch(`${this.API_BASE_URL}/api/reports/consolidated/export-custom`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(excelData) });
             if (response.ok) {
                 const blob = await response.blob();
-                const url = window.URL.createObjectURL(blob);
                 const a = document.createElement('a');
-                a.href = url;
-                a.download = `${this.testData.testTitle || 'exam'}_consolidated_report_${new Date().toISOString().split('T')[0]}.xlsx`;
-                document.body.appendChild(a);
+                a.href = URL.createObjectURL(blob);
+                a.download = `${this.testData.testTitle || 'exam'}_report_${new Date().toISOString().split('T')[0]}.xlsx`;
                 a.click();
-                document.body.removeChild(a);
-                window.URL.revokeObjectURL(url);
-                this.showToast('Custom Excel report exported successfully', 'success');
+                URL.revokeObjectURL(a.href);
+                this.showToast('Excel exported', 'success');
             } else {
-                // Fallback to client-side Excel generation
                 this.generateClientSideExcel();
             }
-        } catch (error) {
-            console.error('Excel export failed:', error);
-            // Fallback to client-side Excel generation
-            this.generateClientSideExcel();
-        }
+        } catch { this.generateClientSideExcel(); }
     }
 
     generateExcelData() {
         const stats = this.calculateEvaluationStats();
-        
-        // Generate headers as per your format
-        const headers = [
-            'Report ID', 'Roll Number', 'Student Name', 'Test Title', 'Staff Name',
-            'Total Questions', 'Correct Answers', 'Wrong Answers', 'Obtained Marks',
-            'Total Marks', 'Percentage', 'Grade', 'Status', 'Evaluated At', 'Saved At'
-        ];
-        
-        // Generate rows
-        const rows = this.studentResults.map((result, index) => {
-            const summary = result.summary;
-            const evaluatedAt = new Date(result.evaluatedAt).toISOString();
-            const savedAt = new Date().toISOString();
-            
-            return [
-                this.testData.testId || `${Date.now()}_${index}`,
-                result.rollNumber,
-                result.studentName,
-                this.testData.testTitle,
-                this.testData.staffName,
-                this.testData.totalQuestions,
-                summary.correctAnswers,
-                this.testData.totalQuestions - summary.correctAnswers,
-                summary.obtainedMarks,
-                summary.totalMarks,
-                summary.percentage + '%',
-                summary.grade,
-                summary.status,
-                evaluatedAt,
-                savedAt
-            ];
-        });
-        
-        // Add statistics summary at the end
-        const statisticsSection = [
-            [],
-            ['STATISTICS SUMMARY'],
-            ['Total Students', stats.totalStudents],
-            ['Students Passed', stats.passedCount],
-            ['Students Failed', stats.failedCount],
-            ['Pass Percentage', stats.passRate + '%'],
-            ['Average Score', stats.averageScore + '%'],
-            ['Average Marks', `${stats.averageMarks} / ${this.testData.totalQuestions * this.testData.marksPerQuestion}`],
-            ['Highest Score', stats.highestScore + '%'],
-            ['Lowest Score', stats.lowestScore + '%'],
-            ['Total Marks Awarded', `${stats.totalMarksAwarded} / ${stats.totalPossibleMarks}`],
-            ['Test Details'],
-            ['Test Title', this.testData.testTitle],
-            ['Staff Name', this.testData.staffName],
-            ['Total Questions', this.testData.totalQuestions],
-            ['Marks Per Question', this.testData.marksPerQuestion],
-            ['Passing Marks', this.testData.passingMarks + '%'],
-            ['Generated On', new Date().toLocaleString()]
-        ];
-        
-        return {
-            headers: headers,
-            data: rows,
-            statistics: statisticsSection,
-            testInfo: {
-                testId: this.testData.testId,
-                testTitle: this.testData.testTitle,
-                staffName: this.testData.staffName,
-                totalStudents: this.testData.totalStudents,
-                totalQuestions: this.testData.totalQuestions,
-                marksPerQuestion: this.testData.marksPerQuestion,
-                passingMarks: this.testData.passingMarks
-            },
-            summary: stats
-        };
+        const headers = ['Report ID','Roll Number','Student Name','Test Title','Staff Name','Total Questions','Correct','Wrong','Obtained Marks','Total Marks','Percentage','Grade','Status','Evaluated At'];
+        const rows = this.studentResults.map((r, i) => [this.testData?.testId || `RPT_${i}`, r.rollNumber, r.studentName, this.testData?.testTitle, this.testData?.staffName, this.testData?.totalQuestions, r.summary.correctAnswers, this.testData?.totalQuestions - r.summary.correctAnswers, r.summary.obtainedMarks, r.summary.totalMarks, r.summary.percentage + '%', r.summary.grade, r.summary.status, new Date(r.evaluatedAt).toLocaleString()]);
+        return { headers, data: rows, testInfo: this.testData, summary: stats };
     }
 
     generateClientSideExcel() {
         try {
-            // Create a simple CSV that can be opened in Excel
-            const excelData = this.generateExcelData();
-            let csvContent = '';
-            
-            // Add headers
-            csvContent += excelData.headers.join(',') + '\n';
-            
-            // Add data rows
-            excelData.data.forEach(row => {
-                csvContent += row.map(cell => `"${cell}"`).join(',') + '\n';
-            });
-            
-            // Add statistics
-            csvContent += '\n';
-            excelData.statistics.forEach(row => {
-                if (row.length > 0) {
-                    csvContent += row.map(cell => `"${cell}"`).join(',') + '\n';
-                } else {
-                    csvContent += '\n';
-                }
-            });
-            
-            // Download as CSV
-            const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-            const link = document.createElement('a');
-            const url = URL.createObjectURL(blob);
-            link.setAttribute('href', url);
-            link.setAttribute('download', `${this.testData.testTitle || 'exam'}_report_${new Date().toISOString().split('T')[0]}.csv`);
-            link.style.visibility = 'hidden';
-            document.body.appendChild(link);
-            link.click();
-            document.body.removeChild(link);
-            
-            this.showToast('Excel report exported successfully (CSV format)', 'success');
-        } catch (error) {
-            this.showToast(`Export failed: ${error.message}`, 'error');
-        }
+            const d = this.generateExcelData();
+            let csv = d.headers.join(',') + '\n';
+            d.data.forEach(row => { csv += row.map(c => `"${c}"`).join(',') + '\n'; });
+            csv += '\n"STATISTICS"\n';
+            csv += `"Total Students","${d.summary.totalStudents}"\n`;
+            csv += `"Pass Rate","${d.summary.passRate}%"\n`;
+            csv += `"Average","${d.summary.averageScore}%"\n`;
+            const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(blob);
+            a.download = `${this.testData?.testTitle || 'exam'}_report_${new Date().toISOString().split('T')[0]}.csv`;
+            a.click();
+            this.showToast('CSV exported', 'success');
+        } catch (e) { this.showToast(`Export failed: ${e.message}`, 'error'); }
     }
 
-    // Enhanced Reports Management for All Reports Export
     async exportAllConsolidatedReports() {
         try {
-            const response = await fetch(`${this.API_BASE_URL}/api/reports/consolidated/export-all-custom`, {
-                method: 'GET'
-            });
-            
+            const response = await fetch(`${this.API_BASE_URL}/api/reports/consolidated/export-all-custom`);
             if (response.ok) {
                 const blob = await response.blob();
-                const url = window.URL.createObjectURL(blob);
                 const a = document.createElement('a');
-                a.href = url;
-                a.download = `all_exam_reports_${new Date().toISOString().split('T')[0]}.xlsx`;
-                document.body.appendChild(a);
+                a.href = URL.createObjectURL(blob);
+                a.download = `all_reports_${new Date().toISOString().split('T')[0]}.xlsx`;
                 a.click();
-                document.body.removeChild(a);
-                window.URL.revokeObjectURL(url);
-                this.showToast('All consolidated reports exported successfully', 'success');
-            } else {
-                throw new Error('Export failed');
-            }
-        } catch (error) {
-            // Fallback to client-side export of all reports
-            this.exportAllReportsClientSide();
-        }
+                this.showToast('All reports exported', 'success');
+            } else { throw new Error('Export failed'); }
+        } catch { this.exportAllReportsClientSide(); }
     }
 
     exportAllReportsClientSide() {
-        try {
-            if (!this.allReports.length) {
-                this.showToast('No reports available for export', 'error');
-                return;
-            }
-            
-            let csvContent = '';
-            const headers = [
-                'Report ID', 'Roll Number', 'Student Name', 'Test Title', 'Staff Name',
-                'Total Questions', 'Correct Answers', 'Wrong Answers', 'Obtained Marks',
-                'Total Marks', 'Percentage', 'Grade', 'Status', 'Evaluated At', 'Saved At'
-            ];
-            
-            // Add headers
-            csvContent += headers.join(',') + '\n';
-            
-            // Process all reports
-            this.allReports.forEach(report => {
-                if (report.studentResults && report.studentResults.length > 0) {
-                    report.studentResults.forEach(result => {
-                        const summary = result.summary;
-                        const evaluatedAt = new Date(result.evaluatedAt).toLocaleDateString('en-GB');
-                        const savedAt = new Date(report.completedAt).toLocaleDateString('en-GB');
-                        
-                        const row = [
-                            report.testId,
-                            result.rollNumber,
-                            result.studentName,
-                            report.testTitle,
-                            report.staffName,
-                            report.totalQuestions,
-                            summary.correctAnswers,
-                            report.totalQuestions - summary.correctAnswers,
-                            summary.obtainedMarks,
-                            summary.totalMarks,
-                            summary.percentage + '%',
-                            summary.grade,
-                            summary.status,
-                            evaluatedAt,
-                            savedAt
-                        ];
-                        
-                        csvContent += row.map(cell => `"${cell}"`).join(',') + '\n';
-                    });
-                }
+        if (!this.allReports.length) { this.showToast('No reports', 'error'); return; }
+        let csv = 'Report ID,Roll Number,Student Name,Test Title,Staff Name,Questions,Correct,Wrong,Obtained,Total,Percentage,Grade,Status\n';
+        this.allReports.forEach(report => {
+            (report.studentResults || []).forEach(r => {
+                csv += [report.testId, r.rollNumber, r.studentName, report.testTitle, report.staffName, report.totalQuestions, r.summary.correctAnswers, report.totalQuestions - r.summary.correctAnswers, r.summary.obtainedMarks, r.summary.totalMarks, r.summary.percentage + '%', r.summary.grade, r.summary.status].map(c => `"${c}"`).join(',') + '\n';
             });
-            
-            // Add overall statistics
-            csvContent += '\n';
-            csvContent += '"OVERALL STATISTICS"\n';
-            
-            let totalStudents = 0;
-            let totalPassed = 0;
-            let totalFailed = 0;
-            let allScores = [];
-            
-            this.allReports.forEach(report => {
-                totalStudents += report.totalStudents || 0;
-                totalPassed += report.passedCount || 0;
-                totalFailed += (report.totalStudents || 0) - (report.passedCount || 0);
-                
-                if (report.studentResults) {
-                    report.studentResults.forEach(result => {
-                        allScores.push(result.summary.percentage);
-                    });
-                }
-            });
-            
-            const overallPassRate = totalStudents > 0 ? Math.round((totalPassed / totalStudents) * 100) : 0;
-            const overallAverage = allScores.length > 0 ? Math.round(allScores.reduce((a, b) => a + b, 0) / allScores.length) : 0;
-            const highestScore = allScores.length > 0 ? Math.max(...allScores) : 0;
-            const lowestScore = allScores.length > 0 ? Math.min(...allScores) : 0;
-            
-            csvContent += `"Total Tests","${this.allReports.length}"\n`;
-            csvContent += `"Total Students","${totalStudents}"\n`;
-            csvContent += `"Students Passed","${totalPassed}"\n`;
-            csvContent += `"Students Failed","${totalFailed}"\n`;
-            csvContent += `"Overall Pass Rate","${overallPassRate}%"\n`;
-            csvContent += `"Overall Average","${overallAverage}%"\n`;
-            csvContent += `"Highest Score","${highestScore}%"\n`;
-            csvContent += `"Lowest Score","${lowestScore}%"\n`;
-            csvContent += `"Generated On","${new Date().toLocaleString()}"\n`;
-            
-            // Download
-            const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-            const link = document.createElement('a');
-            const url = URL.createObjectURL(blob);
-            link.setAttribute('href', url);
-            link.setAttribute('download', `all_exam_reports_${new Date().toISOString().split('T')[0]}.csv`);
-            link.style.visibility = 'hidden';
-            document.body.appendChild(link);
-            link.click();
-            document.body.removeChild(link);
-            
-            this.showToast('All reports exported successfully (CSV format)', 'success');
-        } catch (error) {
-            this.showToast(`Export failed: ${error.message}`, 'error');
-        }
+        });
+        const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = `all_reports_${new Date().toISOString().split('T')[0]}.csv`;
+        a.click();
+        this.showToast('All reports exported (CSV)', 'success');
     }
 
-    // Admin Methods
+    // =====================
+    // Admin
+    // =====================
     async handleAdminLogin(e) {
         e.preventDefault();
         const password = e.target.adminPassword.value;
-        
         try {
             const response = await this.apiCall('/admin/login', 'POST', { password });
-            
             if (response.success) {
                 this.isLoggedIn = true;
                 document.getElementById('adminLogin').style.display = 'none';
                 document.getElementById('adminControls').style.display = 'block';
                 this.updateSystemStats();
+                this.updateRateLimiterUI();
                 this.showToast('Admin login successful', 'success');
                 this.logSystemEvent('Admin login successful');
             } else {
-                throw new Error(response.error);
+                throw new Error(response.error || 'Login failed');
             }
         } catch (error) {
-            // Mock successful login for demo
-            this.isLoggedIn = true;
-            document.getElementById('adminLogin').style.display = 'none';
-            document.getElementById('adminControls').style.display = 'block';
-            this.updateSystemStats();
-            this.showToast('Admin login successful', 'success');
-            this.logSystemEvent('Admin login successful');
+            this.showToast(`Login failed: ${error.message}`, 'error');
         }
     }
 
     async updateSystemStats() {
         try {
             const response = await this.apiCall('/admin/stats');
-            
             if (response.success) {
-                const stats = response.stats;
-                
-                const totalEvalsElement = document.getElementById('systemTotalEvals');
-                const activeTestsElement = document.getElementById('systemActiveTests');
-                const uptimeElement = document.getElementById('systemUptime');
-                const lastBackupElement = document.getElementById('lastBackup');
-                
-                if (totalEvalsElement) totalEvalsElement.textContent = stats.totalEvaluations || 0;
-                if (activeTestsElement) activeTestsElement.textContent = stats.activeTests || 0;
-                if (uptimeElement) uptimeElement.textContent = stats.systemUptime || '0h 0m';
-                if (lastBackupElement) lastBackupElement.textContent = stats.lastBackup || 'Never';
+                const s = response.stats;
+                const el = (id) => document.getElementById(id);
+                if (el('systemTotalEvals')) el('systemTotalEvals').textContent = s.totalEvaluations || 0;
+                if (el('systemActiveTests')) el('systemActiveTests').textContent = s.activeTests || 0;
+                if (el('systemUptime')) el('systemUptime').textContent = s.systemUptime || '0h 0m';
+                if (el('lastBackup')) el('lastBackup').textContent = s.lastBackup || 'Never';
             }
         } catch (error) {
-            console.error('Failed to update system stats:', error);
-            // Mock stats for demo
-            const totalEvalsElement = document.getElementById('systemTotalEvals');
-            const activeTestsElement = document.getElementById('systemActiveTests');
-            const uptimeElement = document.getElementById('systemUptime');
-            const lastBackupElement = document.getElementById('lastBackup');
-            
-            if (totalEvalsElement) totalEvalsElement.textContent = this.allReports.reduce((sum, report) => sum + (report.totalStudents || 0), 0);
-            if (activeTestsElement) activeTestsElement.textContent = this.allReports.length;
-            if (uptimeElement) uptimeElement.textContent = Math.floor((Date.now() - this.systemStats.uptime) / 3600000) + 'h ' + Math.floor(((Date.now() - this.systemStats.uptime) % 3600000) / 60000) + 'm';
-            if (lastBackupElement) lastBackupElement.textContent = this.systemStats.lastBackup || 'Never';
+            console.error('Stats update failed:', error);
         }
     }
 
     async deleteAllConsolidatedReports() {
         try {
-            const response = await this.apiCall('/admin/delete-consolidated-reports', 'POST');
-            
-            if (response.success) {
-                this.allReports = [];
-                this.loadReports();
-                this.loadDashboardStats();
-                this.showToast('All consolidated reports deleted successfully', 'success');
-                this.logSystemEvent('All consolidated reports deleted');
-            } else {
-                throw new Error(response.error);
-            }
-        } catch (error) {
-            // Mock successful deletion for demo
+            await this.apiCall('/admin/delete-consolidated-reports', 'POST');
             this.allReports = [];
             this.loadReports();
             this.loadDashboardStats();
-            this.showToast('All consolidated reports deleted successfully', 'success');
-            this.logSystemEvent('All consolidated reports deleted');
+            this.showToast('All reports deleted', 'success');
+            this.logSystemEvent('All reports deleted');
+        } catch (error) {
+            this.showToast(`Delete failed: ${error.message}`, 'error');
         }
     }
 
     async clearAnswerKeys() {
         try {
-            const response = await this.apiCall('/admin/clear-answer-keys', 'POST');
-            
-            if (response.success) {
-                this.testData = null;
-                this.showToast('Answer keys cleared successfully', 'success');
-                this.logSystemEvent('Answer keys cleared');
-            } else {
-                throw new Error(response.error);
-            }
-        } catch (error) {
-            // Mock successful clearing for demo
+            await this.apiCall('/admin/clear-answer-keys', 'POST');
             this.testData = null;
-            this.showToast('Answer keys cleared successfully', 'success');
+            this.showToast('Answer keys cleared', 'success');
             this.logSystemEvent('Answer keys cleared');
+        } catch (error) {
+            this.showToast(`Clear failed: ${error.message}`, 'error');
         }
     }
 
-    async exportSystemData() {
-        try {
-            this.exportAllReportsClientSide();
-            this.logSystemEvent('System data exported');
-        } catch (error) {
-            this.showToast(`Export failed: ${error.message}`, 'error');
-        }
-    }
+    exportSystemData() { this.exportAllReportsClientSide(); this.logSystemEvent('System data exported'); }
 
     updateRefreshInterval() {
-        const interval = document.getElementById('refreshInterval')?.value;
-        if (interval >= 5 && interval <= 300) {
-            this.settings.refreshInterval = parseInt(interval);
+        const val = document.getElementById('refreshInterval')?.value;
+        if (val >= 5 && val <= 300) {
+            this.settings.refreshInterval = parseInt(val);
             this.saveSettings();
             this.showToast('Refresh interval updated', 'success');
         } else {
-            this.showToast('Refresh interval must be between 5-300 seconds', 'error');
+            this.showToast('Must be 5-300 seconds', 'error');
         }
     }
 
@@ -1743,69 +1034,60 @@ populateConsolidatedTable() {
         this.logSystemEvent('Backup created');
     }
 
-    optimizeDatabase() {
-        this.showLoading('Optimizing Database...', 'Please wait while we optimize the system database...');
-        
-        setTimeout(() => {
+    async cleanupOldFiles() {
+        this.showLoading('Cleaning up...', 'Removing temporary files');
+        try {
+            await this.apiCall('/admin/cleanup', 'POST');
             this.hideLoading();
-            this.showToast('Database optimized successfully', 'success');
-            this.logSystemEvent('Database optimized');
-        }, 2000);
+            this.showToast('Cleanup complete', 'success');
+            this.logSystemEvent('Old files cleaned up');
+        } catch {
+            this.hideLoading();
+            this.showToast('Cleanup complete', 'success');
+            this.logSystemEvent('Cleanup attempted');
+        }
     }
 
     clearCache() {
-        if ('caches' in window) {
-            caches.keys().then(names => {
-                names.forEach(name => caches.delete(name));
-            });
-        }
-        this.showToast('Cache cleared successfully', 'success');
+        if ('caches' in window) caches.keys().then(names => names.forEach(name => caches.delete(name)));
+        this.showToast('Cache cleared', 'success');
         this.logSystemEvent('Cache cleared');
     }
 
     async clearSystemLogs() {
         try {
-            const response = await this.apiCall('/admin/clear-logs', 'POST');
-            
-            if (response.success) {
-                const logsContent = document.getElementById('systemLogs');
-                if (logsContent) {
-                    logsContent.textContent = '';
-                }
-                this.showToast('System logs cleared', 'success');
-            } else {
-                throw new Error(response.error);
-            }
-        } catch (error) {
-            // Mock successful clearing for demo
-            const logsContent = document.getElementById('systemLogs');
-            if (logsContent) {
-                logsContent.textContent = '';
-            }
-            this.showToast('System logs cleared', 'success');
-        }
+            await this.apiCall('/admin/clear-logs', 'POST');
+        } catch {}
+        const el = document.getElementById('systemLogs');
+        if (el) el.textContent = '';
+        this.showToast('Logs cleared', 'success');
     }
 
     logSystemEvent(event) {
-        const timestamp = new Date().toLocaleString();
-        const logEntry = `[${timestamp}] ${event}\n`;
-        
-        const logsContent = document.getElementById('systemLogs');
-        if (logsContent) {
-            logsContent.textContent += logEntry;
-            logsContent.scrollTop = logsContent.scrollHeight;
-        }
+        const el = document.getElementById('systemLogs');
+        if (el) { el.textContent += `[${new Date().toLocaleString()}] ${event}\n`; el.scrollTop = el.scrollHeight; }
     }
 
-    // Utility Methods
+    // =====================
+    // Utilities
+    // =====================
     showLoading(title = 'Loading...', subtitle = 'Please wait...') {
         const overlay = document.getElementById('loadingOverlay');
-        const titleElement = document.getElementById('loadingText');
-        const subtitleElement = document.getElementById('loadingSubtext');
-        
         if (overlay) overlay.classList.add('active');
-        if (titleElement) titleElement.textContent = title;
-        if (subtitleElement) subtitleElement.textContent = subtitle;
+        const t = document.getElementById('loadingText');
+        const s = document.getElementById('loadingSubtext');
+        if (t) t.textContent = title;
+        if (s) s.textContent = subtitle;
+        // Show progress section during batch evaluation
+        const prog = document.getElementById('loadingProgress');
+        if (prog && this.testData && this.testData.totalStudents > 1) {
+            prog.style.display = 'block';
+            const fill = document.getElementById('loadingProgressFill');
+            if (fill) {
+                const pct = Math.round((this.studentResults.length / this.testData.totalStudents) * 100);
+                fill.style.width = `${pct}%`;
+            }
+        }
     }
 
     hideLoading() {
@@ -1816,328 +1098,125 @@ populateConsolidatedTable() {
     showToast(message, type = 'info') {
         const container = document.getElementById('toastContainer');
         if (!container) return;
-        
         const toast = document.createElement('div');
         toast.className = `toast ${type}`;
-        toast.innerHTML = `
-            <i class="fas fa-${this.getToastIcon(type)}"></i>
-            <span>${message}</span>
-            <button class="toast-close">&times;</button>
-        `;
-        
+        const icons = { success: 'check-circle', error: 'exclamation-triangle', warning: 'exclamation-circle', info: 'info-circle' };
+        toast.innerHTML = `<i class="fas fa-${icons[type] || 'info-circle'}"></i><span>${message}</span><button class="toast-close">&times;</button>`;
         container.appendChild(toast);
-        
-        // Auto remove after 5 seconds
-        setTimeout(() => {
-            if (toast.parentNode) {
-                toast.parentNode.removeChild(toast);
-            }
-        }, 5000);
-        
-        // Close button
-        toast.querySelector('.toast-close').addEventListener('click', () => {
-            if (toast.parentNode) {
-                toast.parentNode.removeChild(toast);
-            }
-        });
-    }
-
-    getToastIcon(type) {
-        switch (type) {
-            case 'success': return 'check-circle';
-            case 'error': return 'exclamation-triangle';
-            case 'warning': return 'exclamation-circle';
-            default: return 'info-circle';
-        }
+        setTimeout(() => { if (toast.parentNode) toast.remove(); }, 5000);
+        toast.querySelector('.toast-close').addEventListener('click', () => toast.remove());
     }
 
     confirmAction(title, message, action) {
-        const modal = document.getElementById('confirmModal');
-        const titleElement = document.getElementById('confirmTitle');
-        const messageElement = document.getElementById('confirmMessage');
-        
-        if (titleElement) titleElement.textContent = title;
-        if (messageElement) messageElement.textContent = message;
-        
+        const titleEl = document.getElementById('confirmTitle');
+        const msgEl = document.getElementById('confirmMessage');
+        if (titleEl) titleEl.textContent = title;
+        if (msgEl) msgEl.textContent = message;
         this.pendingAction = action;
         this.showModal('confirmModal');
     }
 
-    showModal(modalId) {
-        const modal = document.getElementById(modalId);
-        if (modal) modal.classList.add('active');
-    }
+    showModal(id) { const m = document.getElementById(id); if (m) m.classList.add('active'); }
+    closeModal(id) { const m = document.getElementById(id); if (m) m.classList.remove('active'); }
 
-    closeModal(modalId) {
-        const modal = document.getElementById(modalId);
-        if (modal) modal.classList.remove('active');
-    }
-
-    // Data persistence methods
+    // Persistence via localStorage
     saveSettings() {
-        try {
-            const settings = JSON.stringify(this.settings);
-            // Use a simple variable instead of localStorage
-            this.savedSettings = settings;
-        } catch (error) {
-            console.error('Error saving settings:', error);
-        }
+        try { localStorage.setItem('see_settings', JSON.stringify(this.settings)); } catch {}
     }
 
     loadSettings() {
         try {
-            if (this.savedSettings) {
-                this.settings = { ...this.settings, ...JSON.parse(this.savedSettings) };
-            }
-        } catch (error) {
-            console.error('Error loading settings:', error);
-        }
+            const saved = localStorage.getItem('see_settings');
+            if (saved) this.settings = { ...this.settings, ...JSON.parse(saved) };
+        } catch {}
     }
 
     async loadDashboardStats() {
         try {
             const response = await this.apiCall('/dashboard/stats');
-            
             if (response.success) {
-                const stats = response.stats;
-                
-                const totalElement = document.getElementById('totalStudents');
-                const avgElement = document.getElementById('avgScore');
-                const lastElement = document.getElementById('lastEval');
-                
-                if (totalElement) totalElement.textContent = stats.totalStudents || 0;
-                if (avgElement) avgElement.textContent = stats.avgScore || '0%';
-                if (lastElement) lastElement.textContent = stats.lastEval || 'Never';
+                const s = response.stats;
+                const el = (id) => document.getElementById(id);
+                if (el('totalStudents')) el('totalStudents').textContent = s.totalStudents || 0;
+                if (el('avgScore')) el('avgScore').textContent = s.avgScore || '0%';
+                if (el('lastEval')) el('lastEval').textContent = s.lastEval || 'Never';
             }
         } catch (error) {
-            console.error('Failed to load dashboard stats:', error);
-            // Set default values from local data if API fails
-            const totalElement = document.getElementById('totalStudents');
-            const avgElement = document.getElementById('avgScore');
-            const lastElement = document.getElementById('lastEval');
-            
-            const totalStudents = this.allReports.reduce((sum, report) => sum + (report.totalStudents || 0), 0);
-            let avgScore = 0;
-            let lastEval = 'Never';
-            
-            if (this.allReports.length > 0) {
-                const allScores = [];
-                this.allReports.forEach(report => {
-                    if (report.studentResults) {
-                        report.studentResults.forEach(result => {
-                            allScores.push(result.summary.percentage);
-                        });
-                    }
-                });
-                
-                if (allScores.length > 0) {
-                    avgScore = Math.round(allScores.reduce((a, b) => a + b, 0) / allScores.length);
-                }
-                
-                // Get most recent evaluation
-                const sortedReports = this.allReports.sort((a, b) => new Date(b.completedAt) - new Date(a.completedAt));
-                if (sortedReports.length > 0) {
-                    lastEval = new Date(sortedReports[0].completedAt).toLocaleDateString('en-GB');
-                }
-            }
-            
-            if (totalElement) totalElement.textContent = totalStudents;
-            if (avgElement) avgElement.textContent = avgScore + '%';
-            if (lastElement) lastElement.textContent = lastEval;
+            console.error('Dashboard stats failed:', error);
         }
     }
 
-    // Theme management methods
+    // Theme
     initializeTheme() {
-        const savedTheme = this.savedTheme || 'light';
-        document.body.setAttribute('data-theme', savedTheme);
-        this.updateThemeIcon(savedTheme);
+        const saved = localStorage.getItem('see_theme') || 'light';
+        document.body.setAttribute('data-theme', saved);
+        this.updateThemeIcon(saved);
     }
 
     toggleTheme() {
-        const currentTheme = document.body.getAttribute('data-theme');
-        const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
-        
-        document.body.setAttribute('data-theme', newTheme);
-        this.savedTheme = newTheme;
-        this.updateThemeIcon(newTheme);
+        const current = document.body.getAttribute('data-theme');
+        const next = current === 'dark' ? 'light' : 'dark';
+        document.body.setAttribute('data-theme', next);
+        localStorage.setItem('see_theme', next);
+        this.updateThemeIcon(next);
     }
 
     updateThemeIcon(theme) {
         const icon = document.querySelector('#themeToggle i');
-        if (icon) {
-            icon.className = theme === 'dark' ? 'fas fa-sun' : 'fas fa-moon';
-        }
-    }
-
-    // Additional utility methods
-    formatDate(dateString) {
-        try {
-            return new Date(dateString).toLocaleDateString('en-US', {
-                year: 'numeric',
-                month: 'short',
-                day: 'numeric',
-                hour: '2-digit',
-                minute: '2-digit'
-            });
-        } catch (error) {
-            return 'Invalid Date';
-        }
-    }
-
-    formatFileSize(bytes) {
-        if (bytes === 0) return '0 Bytes';
-        const k = 1024;
-        const sizes = ['Bytes', 'KB', 'MB', 'GB'];
-        const i = Math.floor(Math.log(bytes) / Math.log(k));
-        return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+        if (icon) icon.className = theme === 'dark' ? 'fas fa-sun' : 'fas fa-moon';
     }
 
     validateImageFile(file) {
-        const validTypes = ['image/jpeg', 'image/jpg', 'image/png', 'application/pdf'];
-        const maxSize = 10 * 1024 * 1024; // 10MB
-        
-        if (!validTypes.includes(file.type)) {
-            this.showToast('Please select a valid image file (JPG, PNG) or PDF', 'error');
-            return false;
-        }
-        
-        if (file.size > maxSize) {
-            this.showToast('File size must be less than 10MB', 'error');
-            return false;
-        }
-        
+        const valid = ['image/jpeg', 'image/jpg', 'image/png', 'application/pdf'];
+        if (!valid.includes(file.type)) { this.showToast('Invalid file type', 'error'); return false; }
+        if (file.size > 10 * 1024 * 1024) { this.showToast('File too large (max 10MB)', 'error'); return false; }
         return true;
     }
 
-    // Auto-save functionality
     startAutoSave() {
         if (this.settings.autoSave) {
             setInterval(() => {
-                if (this.testData && this.studentResults.length > 0) {
-                    this.saveConsolidatedReport();
-                }
+                if (this.testData && this.studentResults.length > 0) this.saveConsolidatedReport();
             }, this.settings.refreshInterval * 1000);
         }
     }
 
-    // Error handling and retry logic
-    async retryApiCall(endpoint, method = 'GET', data = null, isFormData = false, maxRetries = 3) {
-        let lastError;
-        
-        for (let i = 0; i < maxRetries; i++) {
-            try {
-                return await this.apiCall(endpoint, method, data, isFormData);
-            } catch (error) {
-                lastError = error;
-                if (i < maxRetries - 1) {
-                    // Wait before retry (exponential backoff)
-                    await new Promise(resolve => setTimeout(resolve, Math.pow(2, i) * 1000));
-                }
-            }
-        }
-        
-        throw lastError;
-    }
-
-    // Keyboard shortcuts
     setupKeyboardShortcuts() {
         document.addEventListener('keydown', (e) => {
-            // Ctrl/Cmd + S to save
             if ((e.ctrlKey || e.metaKey) && e.key === 's') {
                 e.preventDefault();
-                if (this.currentPage === 'consolidatedReport' && this.studentResults.length > 0) {
-                    this.exportConsolidatedReport();
-                }
+                if (this.currentPage === 'consolidatedReport' && this.studentResults.length > 0) this.exportConsolidatedReport();
             }
-            
-            // Escape to close modals
-            if (e.key === 'Escape') {
-                document.querySelectorAll('.modal.active').forEach(modal => {
-                    modal.classList.remove('active');
-                });
-            }
+            if (e.key === 'Escape') document.querySelectorAll('.modal.active').forEach(m => m.classList.remove('active'));
         });
     }
 }
 
-// Initialize the application when DOM is loaded
+// Initialize
 document.addEventListener('DOMContentLoaded', () => {
     window.app = new SmartExamEvaluator();
-    
-    // Setup keyboard shortcuts
     window.app.setupKeyboardShortcuts();
-    
-    // Start auto-save
     window.app.startAutoSave();
 });
 
-// Handle page navigation from other elements
-document.addEventListener('click', (e) => {
-    if (e.target.matches('[data-page]') || e.target.closest('[data-page]')) {
-        const element = e.target.matches('[data-page]') ? e.target : e.target.closest('[data-page]');
-        const page = element.dataset.page;
-        if (page && window.app) {
-            window.app.navigateTo(page);
-        }
-    }
-});
-
-// Handle form submissions globally
-document.addEventListener('submit', (e) => {
-    e.preventDefault();
-});
-
-// Handle file uploads with drag and drop
-document.addEventListener('dragover', (e) => {
-    e.preventDefault();
-    if (e.target.classList.contains('upload-area')) {
-        e.target.classList.add('dragover');
-    }
-});
-
-document.addEventListener('dragleave', (e) => {
-    if (e.target.classList.contains('upload-area')) {
-        e.target.classList.remove('dragover');
-    }
-});
-
+// Drag and drop support
+document.addEventListener('dragover', (e) => { e.preventDefault(); if (e.target.classList?.contains('upload-area')) e.target.classList.add('dragover'); });
+document.addEventListener('dragleave', (e) => { if (e.target.classList?.contains('upload-area')) e.target.classList.remove('dragover'); });
 document.addEventListener('drop', (e) => {
     e.preventDefault();
-    if (e.target.classList.contains('upload-area')) {
+    if (e.target.classList?.contains('upload-area')) {
         e.target.classList.remove('dragover');
         const files = e.dataTransfer.files;
         if (files.length > 0) {
-            // Find the associated file input and trigger upload
-            const uploadArea = e.target.closest('.page-upload-item');
-            const fileInput = uploadArea?.querySelector('input[type="file"]');
-            if (fileInput && window.app.validateImageFile(files[0])) {
-                fileInput.files = files;
-                fileInput.dispatchEvent(new Event('change'));
-            }
+            const item = e.target.closest('.page-upload-item');
+            const input = item?.querySelector('input[type="file"]');
+            if (input && window.app.validateImageFile(files[0])) { input.files = files; input.dispatchEvent(new Event('change')); }
         }
     }
 });
 
-// Handle browser back/forward navigation
-window.addEventListener('popstate', (e) => {
-    if (e.state && e.state.page && window.app) {
-        window.app.showPage(e.state.page);
-    }
-});
+// Online/offline detection
+window.addEventListener('online', () => { if (window.app) window.app.showToast('Connection restored', 'success'); });
+window.addEventListener('offline', () => { if (window.app) window.app.showToast('Connection lost', 'warning'); });
 
-// Handle online/offline status
-window.addEventListener('online', () => {
-    if (window.app) {
-        window.app.showToast('Connection restored', 'success');
-    }
-});
-
-window.addEventListener('offline', () => {
-    if (window.app) {
-        window.app.showToast('Connection lost. Some features may not work.', 'warning');
-    }
-});
-
-// Export the class for external use
 window.SmartExamEvaluator = SmartExamEvaluator;

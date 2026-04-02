@@ -1,23 +1,143 @@
 import os
 import json
-import cv2
 import numpy as np
 import re
-import pandas as pd
+import shutil
+import threading
+import time
 from datetime import datetime, timedelta
-from flask import Flask, request, jsonify, render_template, send_file, send_from_directory
+from flask import Flask, request, jsonify, render_template, send_file, send_from_directory, session
 from werkzeug.utils import secure_filename
 import google.generativeai as genai
 from flask_cors import CORS
-import base64
 from PIL import Image
 import io
 import traceback
-import zipfile
 import tempfile
 from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
-from openpyxl.utils.dataframe import dataframe_to_rows
+
+# Load environment variables from .env file
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass  # python-dotenv not installed, use system env vars
+
+# =========================
+# Rate Limiter Class
+# =========================
+class RateLimiter:
+    """Token bucket rate limiter with cooling period and pause/resume support."""
+    
+    def __init__(self, rpm=15, rpd=1500, cooling_seconds=2, max_retries=3, backoff_base=2):
+        self.rpm = rpm
+        self.rpd = rpd
+        self.cooling_seconds = cooling_seconds
+        self.max_retries = max_retries
+        self.backoff_base = backoff_base
+        
+        self._lock = threading.Lock()
+        self._paused = False
+        self._pause_event = threading.Event()
+        self._pause_event.set()  # Start unpaused
+        
+        self._minute_tokens = rpm
+        self._day_tokens = rpd
+        self._last_minute_refill = time.time()
+        self._last_day_refill = time.time()
+        self._last_call_time = 0
+        
+        self._total_calls = 0
+        self._total_errors = 0
+        self._calls_today = 0
+        self._day_start = datetime.now().date()
+    
+    def _refill_tokens(self):
+        now = time.time()
+        # Refill minute tokens
+        elapsed_minutes = (now - self._last_minute_refill) / 60.0
+        if elapsed_minutes >= 1.0:
+            self._minute_tokens = min(self.rpm, self._minute_tokens + int(elapsed_minutes * self.rpm))
+            self._last_minute_refill = now
+        # Refill day tokens
+        today = datetime.now().date()
+        if today > self._day_start:
+            self._day_tokens = self.rpd
+            self._calls_today = 0
+            self._day_start = today
+            self._last_day_refill = now
+    
+    def wait_for_token(self):
+        """Block until a token is available, respecting pause state and cooling."""
+        # Wait if paused
+        self._pause_event.wait()
+        
+        with self._lock:
+            self._refill_tokens()
+            
+            # Wait for cooling period
+            elapsed = time.time() - self._last_call_time
+            if elapsed < self.cooling_seconds:
+                wait_time = self.cooling_seconds - elapsed
+                time.sleep(wait_time)
+            
+            # Wait for minute tokens
+            while self._minute_tokens <= 0:
+                time.sleep(1)
+                self._refill_tokens()
+                self._pause_event.wait()  # Check pause during wait
+            
+            # Check day limit
+            if self._day_tokens <= 0:
+                raise Exception("Daily API rate limit reached. Please try again tomorrow.")
+            
+            # Consume tokens
+            self._minute_tokens -= 1
+            self._day_tokens -= 1
+            self._last_call_time = time.time()
+            self._total_calls += 1
+            self._calls_today += 1
+    
+    def record_error(self):
+        with self._lock:
+            self._total_errors += 1
+    
+    def pause(self):
+        self._paused = True
+        self._pause_event.clear()
+    
+    def resume(self):
+        self._paused = False
+        self._pause_event.set()
+    
+    @property
+    def is_paused(self):
+        return self._paused
+    
+    def get_status(self):
+        with self._lock:
+            self._refill_tokens()
+            return {
+                "remainingRPM": self._minute_tokens,
+                "maxRPM": self.rpm,
+                "remainingRPD": self._day_tokens,
+                "maxRPD": self.rpd,
+                "coolingSeconds": self.cooling_seconds,
+                "isPaused": self._paused,
+                "totalCalls": self._total_calls,
+                "totalErrors": self._total_errors,
+                "callsToday": self._calls_today
+            }
+    
+    def update_config(self, rpm=None, rpd=None, cooling_seconds=None):
+        with self._lock:
+            if rpm is not None:
+                self.rpm = rpm
+            if rpd is not None:
+                self.rpd = rpd
+            if cooling_seconds is not None:
+                self.cooling_seconds = cooling_seconds
 
 # =========================
 # Flask Setup
@@ -26,8 +146,7 @@ app = Flask(__name__, static_folder='static', template_folder='templates')
 app.config["UPLOAD_FOLDER"] = "uploads"
 app.config["DATA_FOLDER"] = "data"
 app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024  # 50MB max file size
-app.static_folder = 'static'
-app.static_url_path = '/static'
+app.secret_key = os.environ.get('SECRET_KEY', 'smart-exam-evaluator-secret-2025')
 
 # Create necessary directories
 os.makedirs(app.config["UPLOAD_FOLDER"], exist_ok=True)
@@ -35,25 +154,38 @@ os.makedirs(app.config["DATA_FOLDER"], exist_ok=True)
 os.makedirs("static", exist_ok=True)
 os.makedirs("templates", exist_ok=True)
 
-# Enable CORS for frontend integration
-CORS(app, origins=['*'])
+# Enable CORS — restrict in production
+CORS(app, origins=['http://localhost:5000', 'http://127.0.0.1:5000'])
+
+# Initialize Rate Limiter
+rate_limiter = RateLimiter(
+    rpm=int(os.environ.get('RATE_LIMIT_RPM', 15)),
+    rpd=int(os.environ.get('RATE_LIMIT_RPD', 1500)),
+    cooling_seconds=float(os.environ.get('RATE_LIMIT_COOLING_SECONDS', 2)),
+    max_retries=int(os.environ.get('RATE_LIMIT_MAX_RETRIES', 3)),
+    backoff_base=float(os.environ.get('RATE_LIMIT_BACKOFF_BASE', 2))
+)
 
 # =========================
 # Configure Gemini AI
 # =========================
-API_KEY = "YOUR GEMINI API KEY"  # Replace with your actual API key
-genai.configure(api_key=API_KEY)
+API_KEY = os.environ.get('GEMINI_API_KEY', '')
+if not API_KEY:
+    print("[WARNING] GEMINI_API_KEY not set. Add it to .env file.")
+
+if API_KEY:
+    genai.configure(api_key=API_KEY)
 
 try:
     model = genai.GenerativeModel("gemini-2.0-flash-exp")
-    print("✅ Gemini AI model initialized successfully")
+    print("[OK] Gemini AI model initialized successfully")
 except Exception as e:
-    print(f"❌ Error initializing Gemini AI: {e}")
+    print(f"[ERROR] Error initializing Gemini AI: {e}")
     try:
         model = genai.GenerativeModel("gemini-1.5-flash")
-        print("✅ Fallback to Gemini 1.5 Flash")
+        print("[OK] Fallback to Gemini 1.5 Flash")
     except Exception as e2:
-        print(f"❌ Fallback model failed: {e2}")
+        print(f"[ERROR] Fallback model failed: {e2}")
         model = None
 
 # =========================
@@ -120,93 +252,100 @@ def allowed_file(filename):
            filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
 def process_image_with_ai(image_path, questions_count):
-    """Process image with Gemini AI to extract answers"""
+    """Process image with Gemini AI to extract answers — rate limited with retry."""
     if not model:
-        raise Exception("AI model not available")
+        raise Exception("AI model not available. Check your GEMINI_API_KEY in .env")
     
-    try:
-        # Load image
-        with open(image_path, 'rb') as f:
-            image_data = f.read()
-        
-        # Create the prompt for answer detection
-        prompt = f"""
-        Analyze this handwritten multiple choice answer sheet image. 
-        This page contains {questions_count} questions.
-        
-        For each question, identify which option (A, B, C, or D) is marked/circled/filled.
-        Look for:
-        - Darkened circles or bubbles
-        - Check marks
-        - X marks
-        - Any clear indication of selection
-        
-        Return ONLY the selected answers in order, one letter per line.
-        If a question is unclear or unmarked, respond with 'X'.
-        
-        Example format:
-        A
-        B
-        C
-        D
-        A
-        
-        Analyze the image now:
-        """
-        
-        # Prepare image for API
-        image = Image.open(io.BytesIO(image_data))
-        
-        # Convert to RGB if needed
-        if image.mode != 'RGB':
-            image = image.convert('RGB')
-        
-        # Generate content with AI
-        response = model.generate_content(
-            [prompt, image],
-            generation_config={
-                "temperature": 0.1,
-                "top_p": 0.8,
-                "top_k": 40,
-                "max_output_tokens": 1000,
-            }
-        )
-        
-        if not response or not response.text:
-            raise Exception("Empty response from AI")
-        
-        # Extract answers from response
-        response_text = response.text.strip().upper()
-        print(f"AI Response: {response_text}")
-        
-        # Parse the response to extract answers
-        answers = []
-        lines = response_text.split('\n')
-        
-        for line in lines:
-            line = line.strip()
-            # Look for single letters A, B, C, D, or X
-            if len(line) == 1 and line in ['A', 'B', 'C', 'D', 'X']:
-                answers.append(line)
-            elif len(line) > 1:
-                # Try to extract letters from longer lines
-                matches = re.findall(r'\b[ABCDX]\b', line)
-                answers.extend(matches)
-        
-        # Ensure we have the right number of answers
-        while len(answers) < questions_count:
-            answers.append('X')  # Fill missing with X
-        
-        # Truncate if too many
-        answers = answers[:questions_count]
-        
-        print(f"Extracted answers: {answers}")
-        return answers
-        
-    except Exception as e:
-        print(f"AI processing error: {e}")
-        # Return default answers if AI fails
-        return ['X'] * questions_count
+    if rate_limiter.is_paused:
+        raise Exception("Evaluation is paused. Resume from the admin panel to continue.")
+    
+    # Load image
+    with open(image_path, 'rb') as f:
+        image_data = f.read()
+    
+    prompt = f"""
+    Analyze this handwritten multiple choice answer sheet image. 
+    This page contains {questions_count} questions.
+    
+    For each question, identify which option (A, B, C, or D) is marked/circled/filled.
+    Look for:
+    - Darkened circles or bubbles
+    - Check marks
+    - X marks
+    - Any clear indication of selection
+    
+    Return ONLY the selected answers in order, one letter per line.
+    If a question is unclear or unmarked, respond with 'X'.
+    
+    Example format:
+    A
+    B
+    C
+    D
+    A
+    
+    Analyze the image now:
+    """
+    
+    image = Image.open(io.BytesIO(image_data))
+    if image.mode != 'RGB':
+        image = image.convert('RGB')
+    
+    last_error = None
+    for attempt in range(rate_limiter.max_retries):
+        try:
+            # Wait for rate limiter token (respects cooling + pause)
+            rate_limiter.wait_for_token()
+            
+            response = model.generate_content(
+                [prompt, image],
+                generation_config={
+                    "temperature": 0.1,
+                    "top_p": 0.8,
+                    "top_k": 40,
+                    "max_output_tokens": 1000,
+                },
+                request_options={"timeout": 60}
+            )
+            
+            if not response or not response.text:
+                raise Exception("Empty response from AI")
+            
+            response_text = response.text.strip().upper()
+            print(f"AI Response: {response_text}")
+            
+            answers = []
+            for line in response_text.split('\n'):
+                line = line.strip()
+                if len(line) == 1 and line in ['A', 'B', 'C', 'D', 'X']:
+                    answers.append(line)
+                elif len(line) > 1:
+                    matches = re.findall(r'\b[ABCDX]\b', line)
+                    answers.extend(matches)
+            
+            while len(answers) < questions_count:
+                answers.append('X')
+            answers = answers[:questions_count]
+            
+            print(f"Extracted answers: {answers}")
+            return answers
+            
+        except Exception as e:
+            last_error = e
+            rate_limiter.record_error()
+            error_str = str(e).lower()
+            
+            if '429' in error_str or 'rate' in error_str or 'quota' in error_str:
+                wait_time = rate_limiter.backoff_base ** (attempt + 1)
+                log_system_event("warning", f"Rate limited (attempt {attempt+1}), waiting {wait_time}s...")
+                time.sleep(wait_time)
+            else:
+                print(f"AI processing error (attempt {attempt+1}): {e}")
+                if attempt < rate_limiter.max_retries - 1:
+                    time.sleep(1)
+    
+    log_system_event("error", f"AI processing failed after {rate_limiter.max_retries} retries: {last_error}")
+    return ['X'] * questions_count
 
 def create_enhanced_excel_report(consolidated_data):
     """Create enhanced Excel report with multiple sheets and formatting"""
@@ -676,16 +815,36 @@ def evaluate_student():
         
         log_system_event("info", f"Evaluation completed: {student_name} ({roll_number}) - {percentage:.1f}% ({status})")
         
+        # Clean up uploaded temp files to prevent disk filling up
+        for fpath in image_paths:
+            try:
+                if os.path.exists(fpath):
+                    os.remove(fpath)
+            except Exception:
+                pass
+        
         return jsonify({
             "success": True, 
-            "evaluation": evaluation_result
+            "evaluation": evaluation_result,
+            "rateLimiter": rate_limiter.get_status()
         })
         
     except Exception as e:
         error_msg = str(e)
         log_system_event("error", f"Evaluation failed: {error_msg}")
         print(f"Full error traceback: {traceback.format_exc()}")
-        return jsonify({"success": False, "error": error_msg}), 500
+        # Clean up any uploaded files on error too
+        for fpath in image_paths:
+            try:
+                if os.path.exists(fpath):
+                    os.remove(fpath)
+            except Exception:
+                pass
+        return jsonify({
+            "success": False, 
+            "error": error_msg,
+            "rateLimiter": rate_limiter.get_status()
+        }), 500
 
 # =========================
 # Consolidated Reports Routes
@@ -1267,16 +1426,19 @@ def delete_consolidated_report(test_id):
 
 @app.route('/api/admin/login', methods=['POST'])
 def admin_login():
-    """Admin login authentication"""
+    """Admin login authentication with session"""
     try:
         data = request.get_json()
         password = data.get('password', '')
         
-        # Load settings to get admin password
-        settings = load_json_data(SETTINGS_FILE, {"adminPassword": "admin123"})
-        admin_password = settings.get("adminPassword", "admin123")
+        # Check env var first, then settings file
+        admin_password = os.environ.get('ADMIN_PASSWORD', '')
+        if not admin_password:
+            settings = load_json_data(SETTINGS_FILE, {"adminPassword": "admin123"})
+            admin_password = settings.get("adminPassword", "admin123")
         
         if password == admin_password:
+            session['admin_logged_in'] = True
             log_system_event("info", "Admin login successful")
             return jsonify({"success": True})
         else:
@@ -1632,17 +1794,15 @@ def get_file_stats():
 def health_check():
     """Health check endpoint"""
     try:
-        # Check AI model availability
         ai_status = "available" if model else "unavailable"
         
-        # Check disk space
+        # Use shutil.disk_usage (cross-platform, works on Windows)
         try:
-            disk_usage = os.statvfs('.')
-            free_space_mb = (disk_usage.f_bavail * disk_usage.f_frsize) / (1024 * 1024)
-        except:
+            usage = shutil.disk_usage('.')
+            free_space_mb = usage.free / (1024 * 1024)
+        except Exception:
             free_space_mb = 0
         
-        # Check data files
         files_status = {
             "consolidatedReports": os.path.exists(CONSOLIDATED_REPORTS_FILE),
             "answerKeys": os.path.exists(ANSWER_KEYS_FILE),
@@ -1656,7 +1816,8 @@ def health_check():
             "uptime": get_system_uptime(),
             "aiModel": ai_status,
             "diskSpace": f"{free_space_mb:.1f}MB",
-            "dataFiles": files_status
+            "dataFiles": files_status,
+            "rateLimiter": rate_limiter.get_status()
         }
         
         return jsonify({"success": True, "health": health_data})
@@ -1845,7 +2006,7 @@ def bad_request(error):
 
 def initialize_system():
     """Initialize system on startup"""
-    print("🚀 Initializing Smart Exam Evaluator System v2.2.0...")
+    print("[INIT] Initializing Smart Exam Evaluator System v2.2.0...")
     
     # Log system start
     log_system_event("info", "Smart Exam Evaluator system started")
@@ -1865,33 +2026,33 @@ def initialize_system():
     
     if not os.path.exists(SETTINGS_FILE):
         save_json_data(SETTINGS_FILE, default_settings)
-        print("✅ Default settings created")
+        print("[OK] Default settings created")
     
     # Initialize empty data files if they don't exist
     if not os.path.exists(CONSOLIDATED_REPORTS_FILE):
         save_json_data(CONSOLIDATED_REPORTS_FILE, [])
-        print("✅ Consolidated reports file initialized")
+        print("[OK] Consolidated reports file initialized")
     
     if not os.path.exists(ANSWER_KEYS_FILE):
         save_json_data(ANSWER_KEYS_FILE, [])
-        print("✅ Answer keys file initialized")
+        print("[OK] Answer keys file initialized")
     
     if not os.path.exists(LOGS_FILE):
         save_json_data(LOGS_FILE, [])
-        print("✅ Logs file initialized")
+        print("[OK] Logs file initialized")
     
     # Check AI model
     if model:
-        print("✅ Gemini AI model ready")
+        print("[OK] Gemini AI model ready")
     else:
-        print("⚠️  Gemini AI model not available - check API key")
+        print("[WARNING] Gemini AI model not available - check API key")
     
     # Print system info
-    print(f"📁 Upload folder: {app.config['UPLOAD_FOLDER']}")
-    print(f"📁 Data folder: {app.config['DATA_FOLDER']}")
-    print(f"🔧 Max file size: {app.config['MAX_CONTENT_LENGTH'] / (1024*1024):.0f}MB")
+    print(f"[INFO] Upload folder: {app.config['UPLOAD_FOLDER']}")
+    print(f"[INFO] Data folder: {app.config['DATA_FOLDER']}")
+    print(f"[INFO] Max file size: {app.config['MAX_CONTENT_LENGTH'] / (1024*1024):.0f}MB")
     
-    print("✅ System initialization complete!")
+    print("[OK] System initialization complete!")
     print("=" * 50)
 
 # =========================
@@ -2028,22 +2189,62 @@ def create_sample_data():
         return jsonify({"success": False, "error": str(e)}), 500
 
 # =========================
+# Rate Limiter API Routes
+# =========================
+
+@app.route('/api/rate-limiter/status', methods=['GET'])
+def get_rate_limiter_status():
+    """Get current rate limiter status"""
+    return jsonify({"success": True, "rateLimiter": rate_limiter.get_status()})
+
+@app.route('/api/rate-limiter/pause', methods=['POST'])
+def pause_rate_limiter():
+    """Pause all API calls"""
+    rate_limiter.pause()
+    log_system_event("warning", "API rate limiter paused by admin")
+    return jsonify({"success": True, "isPaused": True})
+
+@app.route('/api/rate-limiter/resume', methods=['POST'])
+def resume_rate_limiter():
+    """Resume API calls"""
+    rate_limiter.resume()
+    log_system_event("info", "API rate limiter resumed by admin")
+    return jsonify({"success": True, "isPaused": False})
+
+@app.route('/api/rate-limiter/config', methods=['POST'])
+def update_rate_limiter_config():
+    """Update rate limiter configuration"""
+    try:
+        data = request.get_json()
+        rate_limiter.update_config(
+            rpm=data.get('rpm'),
+            rpd=data.get('rpd'),
+            cooling_seconds=data.get('coolingSeconds')
+        )
+        log_system_event("info", f"Rate limiter config updated: {data}")
+        return jsonify({"success": True, "rateLimiter": rate_limiter.get_status()})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+# =========================
 # Main Application
 # =========================
 
 if __name__ == '__main__':
     initialize_system()
     
-    # Run the app
-    print("🌐 Starting Flask server...")
-    print("📱 Access the application at: http://localhost:5000")
-    print("🔧 Admin panel available after login")
-    print("📊 Enhanced Excel export functionality enabled")
-    print("🤖 AI-powered answer sheet processing ready")
+    is_debug = os.environ.get('FLASK_DEBUG', 'false').lower() in ('true', '1', 'yes')
+    
+    print("[SERVER] Starting Flask server...")
+    print("[SERVER] Access the application at: http://localhost:5000")
+    print("[SERVER] Admin panel available after login")
+    print("[SERVER] Enhanced Excel export functionality enabled")
+    print("[SERVER] AI-powered answer sheet processing ready")
+    print(f"[SERVER] Rate limiter: {rate_limiter.rpm} RPM, {rate_limiter.rpd} RPD, {rate_limiter.cooling_seconds}s cooling")
     print("=" * 50)
     
     app.run(
-        debug=True, 
+        debug=is_debug, 
         host='0.0.0.0', 
         port=5000,
         threaded=True
